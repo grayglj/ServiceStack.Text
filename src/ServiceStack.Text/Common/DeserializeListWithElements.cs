@@ -5,18 +5,15 @@
 // Authors:
 //   Demis Bellot (demis.bellot@gmail.com)
 //
-// Copyright 2012 Service Stack LLC. All Rights Reserved.
+// Copyright 2012 ServiceStack, Inc. All Rights Reserved.
 //
 // Licensed under the same terms of ServiceStack.
 //
 
 using System;
-using System.Linq;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.Reflection;
 using System.Threading;
-using ServiceStack.Text.Json;
 
 namespace ServiceStack.Text.Common
 {
@@ -28,25 +25,32 @@ namespace ServiceStack.Text.Common
         private static Dictionary<Type, ParseListDelegate> ParseDelegateCache
             = new Dictionary<Type, ParseListDelegate>();
 
-        private delegate object ParseListDelegate(string value, Type createListType, ParseStringDelegate parseFn);
+        public delegate object ParseListDelegate(ReadOnlySpan<char> value, Type createListType, ParseStringSpanDelegate parseFn);
 
         public static Func<string, Type, ParseStringDelegate, object> GetListTypeParseFn(
             Type createListType, Type elementType, ParseStringDelegate parseFn)
         {
-            ParseListDelegate parseDelegate;
-            if (ParseDelegateCache.TryGetValue(elementType, out parseDelegate))
+            var func = GetListTypeParseStringSpanFn(createListType, elementType, v => parseFn(v.ToString()));
+            return (s, t, d) => func(s.AsSpan(), t, v => d(v.ToString()));
+        }
+
+        private static readonly Type[] signature = {typeof(ReadOnlySpan<char>), typeof(Type), typeof(ParseStringSpanDelegate)};
+
+        public static ParseListDelegate GetListTypeParseStringSpanFn(
+            Type createListType, Type elementType, ParseStringSpanDelegate parseFn)
+        {
+            if (ParseDelegateCache.TryGetValue(elementType, out var parseDelegate))
                 return parseDelegate.Invoke;
 
             var genericType = typeof(DeserializeListWithElements<,>).MakeGenericType(elementType, typeof(TSerializer));
-            var mi = genericType.GetStaticMethod("ParseGenericList");
+            var mi = genericType.GetStaticMethod("ParseGenericList", signature);
             parseDelegate = (ParseListDelegate)mi.MakeDelegate(typeof(ParseListDelegate));
 
             Dictionary<Type, ParseListDelegate> snapshot, newCache;
             do
             {
                 snapshot = ParseDelegateCache;
-                newCache = new Dictionary<Type, ParseListDelegate>(ParseDelegateCache);
-                newCache[elementType] = parseDelegate;
+                newCache = new Dictionary<Type, ParseListDelegate>(ParseDelegateCache) { [elementType] = parseDelegate };
 
             } while (!ReferenceEquals(
                 Interlocked.CompareExchange(ref ParseDelegateCache, newCache, snapshot), snapshot));
@@ -54,28 +58,33 @@ namespace ServiceStack.Text.Common
             return parseDelegate.Invoke;
         }
 
-        public static string StripList(string value)
+        public static ReadOnlySpan<char> StripList(ReadOnlySpan<char> value)
         {
-            if (string.IsNullOrEmpty(value))
-                return null;
+            if (value.IsNullOrEmpty())
+                return default;
 
-            value = value.TrimEnd();
+            value = value.Trim();
 
             const int startQuotePos = 1;
             const int endQuotePos = 2;
             var ret = value[0] == JsWriter.ListStartChar
-                    ? value.Substring(startQuotePos, value.Length - endQuotePos)
+                    ? value.Slice(startQuotePos, value.Length - endQuotePos)
                     : value;
-
-            var pos = 0;
-            Serializer.EatWhitespace(ret, ref pos);
-            return ret.Substring(pos, ret.Length - pos);
+            var val = ret.AdvancePastWhitespace();
+            if (val.Length == 0)
+                return TypeConstants.EmptyStringSpan;
+            return val;
         }
 
         public static List<string> ParseStringList(string value)
         {
-            if ((value = StripList(value)) == null) return null;
-            if (value == string.Empty) return new List<string>();
+            return ParseStringList(value.AsSpan());
+        }
+
+        public static List<string> ParseStringList(ReadOnlySpan<char> value)
+        {
+            if ((value = StripList(value)).IsNullOrEmpty())
+                return value.IsEmpty ? null : new List<string>();
 
             var to = new List<string>();
             var valueLength = value.Length;
@@ -85,7 +94,7 @@ namespace ServiceStack.Text.Common
             {
                 var elementValue = Serializer.EatValue(value, ref i);
                 var listValue = Serializer.UnescapeString(elementValue);
-                to.Add(listValue);
+                to.Add(listValue.Value());
                 if (Serializer.EatItemSeperatorOrMapEndChar(value, ref i) && i == valueLength)
                 {
                     // If we ate a separator and we are at the end of the value, 
@@ -97,18 +106,46 @@ namespace ServiceStack.Text.Common
             return to;
         }
 
-        public static List<int> ParseIntList(string value)
-        {
-            if ((value = StripList(value)) == null) return null;
-            if (value == string.Empty) return new List<int>();
+        public static List<int> ParseIntList(string value) => ParseIntList(value.AsSpan());
 
-            var intParts = value.Split(JsWriter.ItemSeperator);
-            var intValues = new List<int>(intParts.Length);
-            foreach (var intPart in intParts)
+        public static List<int> ParseIntList(ReadOnlySpan<char> value)
+        {
+            if ((value = StripList(value)).IsNullOrEmpty()) 
+                return value.IsEmpty ? null : new List<int>();
+
+            var to = new List<int>();
+            var valueLength = value.Length;
+
+            var i = 0;
+            while (i < valueLength)
             {
-                intValues.Add(int.Parse(intPart));
+                var elementValue = Serializer.EatValue(value, ref i);
+                to.Add(MemoryProvider.Instance.ParseInt32(elementValue));
+                Serializer.EatItemSeperatorOrMapEndChar(value, ref i);
             }
-            return intValues;
+
+            return to;
+        }
+
+        public static List<byte> ParseByteList(string value) => ParseByteList(value.AsSpan());
+
+        public static List<byte> ParseByteList(ReadOnlySpan<char> value)
+        {
+            if ((value = StripList(value)).IsNullOrEmpty()) 
+                return value.IsEmpty ? null : new List<byte>();
+
+            var to = new List<byte>();
+            var valueLength = value.Length;
+
+            var i = 0;
+            while (i < valueLength)
+            {
+                var elementValue = Serializer.EatValue(value, ref i);
+                to.Add(MemoryProvider.Instance.ParseByte(elementValue));
+                Serializer.EatItemSeperatorOrMapEndChar(value, ref i);
+            }
+
+            return to;
         }
     }
 
@@ -119,21 +156,30 @@ namespace ServiceStack.Text.Common
 
         public static ICollection<T> ParseGenericList(string value, Type createListType, ParseStringDelegate parseFn)
         {
-            if ((value = DeserializeListWithElements<TSerializer>.StripList(value)) == null) return null;
+            return ParseGenericList(value.AsSpan(), createListType, v => parseFn(v.ToString()));
+        }
 
-            var isReadOnly = createListType != null
-                && (createListType.IsGeneric() && createListType.GenericTypeDefinition() == typeof(ReadOnlyCollection<>));
-
+        public static ICollection<T> ParseGenericList(ReadOnlySpan<char> value, Type createListType, ParseStringSpanDelegate parseFn)
+        {
+            var isReadOnly = createListType != null && (createListType.IsGenericType && createListType.GetGenericTypeDefinition() == typeof(ReadOnlyCollection<>));
             var to = (createListType == null || isReadOnly)
                 ? new List<T>()
                 : (ICollection<T>)createListType.CreateInstance();
 
-            if (value == string.Empty) return to;
+            var objSerializer = Json.JsonTypeSerializer.Instance.ObjectDeserializer;
+            if (to is List<object> && objSerializer != null && typeof(TSerializer) == typeof(Json.JsonTypeSerializer))
+                return (ICollection<T>)objSerializer(value);
+
+            if ((value = DeserializeListWithElements<TSerializer>.StripList(value)).IsEmpty) 
+                return null;
+
+            if (value.IsNullOrEmpty())
+                return isReadOnly ? (ICollection<T>)Activator.CreateInstance(createListType, to) : to;
 
             var tryToParseItemsAsPrimitiveTypes =
-                JsConfig.TryToParsePrimitiveTypeValues && typeof(T) == typeof(object);
+                typeof(T) == typeof(object) && JsConfig.TryToParsePrimitiveTypeValues;
 
-            if (!string.IsNullOrEmpty(value))
+            if (!value.IsNullOrEmpty())
             {
                 var valueLength = value.Length;
                 var i = 0;
@@ -143,24 +189,32 @@ namespace ServiceStack.Text.Common
                     do
                     {
                         var itemValue = Serializer.EatTypeValue(value, ref i);
-                        to.Add((T)parseFn(itemValue));
+                        if (!itemValue.IsEmpty)
+                        {
+                            to.Add((T)parseFn(itemValue));
+                        }
+                        else
+                        {
+                            to.Add(default);
+                        }
                         Serializer.EatWhitespace(value, ref i);
                     } while (++i < value.Length);
                 }
                 else
                 {
-
+                    
                     while (i < valueLength)
                     {
                         var startIndex = i;
                         var elementValue = Serializer.EatValue(value, ref i);
                         var listValue = elementValue;
-                        if (listValue != null)
+                        var isEmpty = listValue.IsNullOrEmpty();
+                        if (!isEmpty)
                         {
                             if (tryToParseItemsAsPrimitiveTypes)
                             {
                                 Serializer.EatWhitespace(value, ref startIndex);
-                                to.Add((T)DeserializeType<TSerializer>.ParsePrimitive(elementValue, value[startIndex]));
+                                to.Add((T)DeserializeType<TSerializer>.ParsePrimitive(elementValue.Value(), value[startIndex]));
                             }
                             else
                             {
@@ -172,12 +226,12 @@ namespace ServiceStack.Text.Common
                         {
                             // If we ate a separator and we are at the end of the value, 
                             // it means the last element is empty => add default
-                            to.Add(default(T));
+                            to.Add(default);
                             continue;
                         }
 
-                        if (listValue == null)
-                            to.Add(default(T));
+                        if (isEmpty)
+                            to.Add(default);
                     }
 
                 }
@@ -192,23 +246,24 @@ namespace ServiceStack.Text.Common
     public static class DeserializeList<T, TSerializer>
         where TSerializer : ITypeSerializer
     {
-        private readonly static ParseStringDelegate CacheFn;
+        private static readonly ParseStringSpanDelegate CacheFn;
 
         static DeserializeList()
         {
-            CacheFn = GetParseFn();
+            CacheFn = GetParseStringSpanFn();
         }
 
-        public static ParseStringDelegate Parse
-        {
-            get { return CacheFn; }
-        }
+        public static ParseStringDelegate Parse => v => CacheFn(v.AsSpan());
 
-        public static ParseStringDelegate GetParseFn()
+        public static ParseStringSpanDelegate ParseStringSpan => CacheFn;
+
+        public static ParseStringDelegate GetParseFn() => v => GetParseStringSpanFn()(v.AsSpan());
+
+        public static ParseStringSpanDelegate GetParseStringSpanFn()
         {
             var listInterface = typeof(T).GetTypeWithGenericInterfaceOf(typeof(IList<>));
             if (listInterface == null)
-                throw new ArgumentException(string.Format("Type {0} is not of type IList<>", typeof(T).FullName));
+                throw new ArgumentException($"Type {typeof(T).FullName} is not of type IList<>");
 
             //optimized access for regularly used types
             if (typeof(T) == typeof(List<string>))
@@ -216,16 +271,16 @@ namespace ServiceStack.Text.Common
 
             if (typeof(T) == typeof(List<int>))
                 return DeserializeListWithElements<TSerializer>.ParseIntList;
+            
+            var elementType = listInterface.GetGenericArguments()[0];
 
-            var elementType = listInterface.GenericTypeArguments()[0];
-
-            var supportedTypeParseMethod = DeserializeListWithElements<TSerializer>.Serializer.GetParseFn(elementType);
+            var supportedTypeParseMethod = DeserializeListWithElements<TSerializer>.Serializer.GetParseStringSpanFn(elementType);
             if (supportedTypeParseMethod != null)
             {
                 var createListType = typeof(T).HasAnyTypeDefinitionsOf(typeof(List<>), typeof(IList<>))
                     ? null : typeof(T);
 
-                var parseFn = DeserializeListWithElements<TSerializer>.GetListTypeParseFn(createListType, elementType, supportedTypeParseMethod);
+                var parseFn = DeserializeListWithElements<TSerializer>.GetListTypeParseStringSpanFn(createListType, elementType, supportedTypeParseMethod);
                 return value => parseFn(value, createListType, supportedTypeParseMethod);
             }
 
@@ -237,23 +292,24 @@ namespace ServiceStack.Text.Common
     internal static class DeserializeEnumerable<T, TSerializer>
         where TSerializer : ITypeSerializer
     {
-        private readonly static ParseStringDelegate CacheFn;
+        private static readonly ParseStringSpanDelegate CacheFn;
 
         static DeserializeEnumerable()
         {
-            CacheFn = GetParseFn();
+            CacheFn = GetParseStringSpanFn();
         }
 
-        public static ParseStringDelegate Parse
-        {
-            get { return CacheFn; }
-        }
+        public static ParseStringDelegate Parse => v => CacheFn(v.AsSpan());
 
-        public static ParseStringDelegate GetParseFn()
+        public static ParseStringSpanDelegate ParseStringSpan => CacheFn;
+
+        public static ParseStringDelegate GetParseFn() => v => GetParseStringSpanFn()(v.AsSpan());
+
+        public static ParseStringSpanDelegate GetParseStringSpanFn()
         {
             var enumerableInterface = typeof(T).GetTypeWithGenericInterfaceOf(typeof(IEnumerable<>));
             if (enumerableInterface == null)
-                throw new ArgumentException(string.Format("Type {0} is not of type IEnumerable<>", typeof(T).FullName));
+                throw new ArgumentException($"Type {typeof(T).FullName} is not of type IEnumerable<>");
 
             //optimized access for regularly used types
             if (typeof(T) == typeof(IEnumerable<string>))
@@ -262,14 +318,14 @@ namespace ServiceStack.Text.Common
             if (typeof(T) == typeof(IEnumerable<int>))
                 return DeserializeListWithElements<TSerializer>.ParseIntList;
 
-            var elementType = enumerableInterface.GenericTypeArguments()[0];
+            var elementType = enumerableInterface.GetGenericArguments()[0];
 
-            var supportedTypeParseMethod = DeserializeListWithElements<TSerializer>.Serializer.GetParseFn(elementType);
+            var supportedTypeParseMethod = DeserializeListWithElements<TSerializer>.Serializer.GetParseStringSpanFn(elementType);
             if (supportedTypeParseMethod != null)
             {
                 const Type createListTypeWithNull = null; //Use conversions outside this class. see: Queue
 
-                var parseFn = DeserializeListWithElements<TSerializer>.GetListTypeParseFn(
+                var parseFn = DeserializeListWithElements<TSerializer>.GetListTypeParseStringSpanFn(
                     createListTypeWithNull, elementType, supportedTypeParseMethod);
 
                 return value => parseFn(value, createListTypeWithNull, supportedTypeParseMethod);

@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.CompilerServices;
 using ServiceStack.Text.Json;
 using ServiceStack.Text.Jsv;
 
@@ -41,11 +42,12 @@ namespace ServiceStack.Text.Common
             {
                 EscapeCharFlags[escapeChar] = true;
             }
-            var loadConfig = JsConfig.EmitCamelCaseNames; //force load
+            var loadConfig = JsConfig.TextCase; //force load
         }
 
         public static void WriteDynamic(Action callback)
         {
+            var prevState = JsState.IsWritingDynamic;
             JsState.IsWritingDynamic = true;
             try
             {
@@ -53,7 +55,7 @@ namespace ServiceStack.Text.Common
             }
             finally
             {
-                JsState.IsWritingDynamic = false;
+                JsState.IsWritingDynamic = prevState;
             }
         }
 
@@ -152,6 +154,46 @@ namespace ServiceStack.Text.Common
                     break;
             }
         }
+
+        public static bool ShouldAllowRuntimeType(Type type)
+        {
+            if (!JsState.IsRuntimeType)
+                return true;
+
+            if (JsConfig.AllowRuntimeType?.Invoke(type) == true)
+                return true;
+
+            var allowAttributesNamed = JsConfig.AllowRuntimeTypeWithAttributesNamed;
+            if (allowAttributesNamed?.Count > 0)
+            {
+                var oAttrs = type.AllAttributes();
+                foreach (var oAttr in oAttrs)
+                {
+                    if (!(oAttr is Attribute attr)) continue;
+                    if (allowAttributesNamed.Contains(attr.GetType().Name))
+                        return true;
+                }
+            }
+
+            var allowInterfacesNamed = JsConfig.AllowRuntimeTypeWithInterfacesNamed;
+            if (allowInterfacesNamed?.Count > 0)
+            {
+                var interfaces = type.GetInterfaces();
+                foreach (var interfaceType in interfaces)
+                {
+                    if (allowInterfacesNamed.Contains(interfaceType.Name))
+                        return true;
+                }
+            }
+
+            return false;
+        }
+
+        public static void AssertAllowedRuntimeType(Type type)
+        {
+            if (!ShouldAllowRuntimeType(type))
+                throw new NotSupportedException($"{type.Name} is not an allowed Runtime Type. Whitelist Type with [RuntimeSerializable] or IRuntimeSerializable.");
+        }
     }
 
     public class JsWriter<TSerializer>
@@ -162,14 +204,11 @@ namespace ServiceStack.Text.Common
         public JsWriter()
         {
             this.SpecialTypes = new Dictionary<Type, WriteObjectDelegate>
-        	{
-        		{ typeof(Uri), Serializer.WriteObjectString },
-        		{ typeof(Type), WriteType },
-        		{ typeof(Exception), Serializer.WriteException },
-#if !(__IOS__ || SL5 || XBOX || ANDROID || PCL)
-                { typeof(System.Data.Linq.Binary), Serializer.WriteLinqBinary },
-#endif
-        	};
+            {
+                { typeof(Uri), Serializer.WriteObjectString },
+                { typeof(Type), WriteType },
+                { typeof(Exception), Serializer.WriteException },
+            };
         }
 
         public WriteObjectDelegate GetValueTypeToStringMethod(Type type)
@@ -179,7 +218,7 @@ namespace ServiceStack.Text.Common
             if (underlyingType == null)
                 underlyingType = type;
 
-            if (!underlyingType.IsEnum())
+            if (!underlyingType.IsEnum)
             {
                 var typeCode = underlyingType.GetTypeCode();
 
@@ -196,6 +235,8 @@ namespace ServiceStack.Text.Common
 
                 if (typeCode == TypeCode.Byte)
                     return Serializer.WriteByte;
+                if (typeCode == TypeCode.SByte)
+                    return Serializer.WriteSByte;
 
                 if (typeCode == TypeCode.Int16)
                     return Serializer.WriteInt16;
@@ -240,10 +281,10 @@ namespace ServiceStack.Text.Common
             }
             else
             {
-                if (underlyingType.IsEnum())
-                    return type.FirstAttribute<FlagsAttribute>() != null
-                        ? (WriteObjectDelegate)Serializer.WriteEnumFlags
-                        : Serializer.WriteEnum;
+                if (underlyingType.IsEnum)
+                {
+                    return Serializer.WriteEnum;
+                }
             }
 
             if (type.HasInterface(typeof(IFormattable)))
@@ -300,10 +341,16 @@ namespace ServiceStack.Text.Common
             var valueWriter = (IValueWriter)value;
             valueWriter.WriteTo(Serializer, writer);
         }
+        
+        void ThrowTaskNotSupported(TextWriter writer, object value) =>
+            throw new NotSupportedException("Serializing Task's is not supported. Did you forget to await it?");
 
         private WriteObjectDelegate GetCoreWriteFn<T>()
         {
-            if ((typeof(T).IsValueType() && !JsConfig.TreatAsRefType(typeof(T))) || JsConfig<T>.HasSerializeFn)
+            if (typeof(T).IsInstanceOf(typeof(System.Threading.Tasks.Task)))
+                return ThrowTaskNotSupported;
+            
+            if (typeof(T).IsValueType && !JsConfig.TreatAsRefType(typeof(T)) || JsConfig<T>.HasSerializeFn)
             {
                 return JsConfig<T>.HasSerializeFn
                     ? JsConfig<T>.WriteFn<TSerializer>
@@ -343,12 +390,12 @@ namespace ServiceStack.Text.Common
                 var mapInterface = typeof(T).GetTypeWithGenericTypeDefinitionOf(typeof(IDictionary<,>));
                 if (mapInterface != null)
                 {
-                    var mapTypeArgs = mapInterface.GenericTypeArguments();
+                    var mapTypeArgs = mapInterface.GetGenericArguments();
                     var writeFn = WriteDictionary<TSerializer>.GetWriteGenericDictionary(
                         mapTypeArgs[0], mapTypeArgs[1]);
 
                     var keyWriteFn = Serializer.GetWriteFn(mapTypeArgs[0]);
-                    var valueWriteFn = typeof(T) == typeof(JsonObject)
+                    var valueWriteFn = typeof(JsonObject).IsAssignableFrom(typeof(T))
                         ? JsonObject.WriteValue
                         : Serializer.GetWriteFn(mapTypeArgs[1]);
 
@@ -359,29 +406,29 @@ namespace ServiceStack.Text.Common
             var enumerableInterface = typeof(T).GetTypeWithGenericTypeDefinitionOf(typeof(IEnumerable<>));
             if (enumerableInterface != null)
             {
-                var elementType = enumerableInterface.GenericTypeArguments()[0];
+                var elementType = enumerableInterface.GetGenericArguments()[0];
                 var writeFn = WriteListsOfElements<TSerializer>.GetGenericWriteEnumerable(elementType);
                 return writeFn;
             }
 
             var isDictionary = typeof(T) != typeof(IEnumerable) && typeof(T) != typeof(ICollection)
-                && (typeof(T).AssignableFrom(typeof(IDictionary)) || typeof(T).HasInterface(typeof(IDictionary)));
+                && (typeof(T).IsAssignableFrom(typeof(IDictionary)) || typeof(T).HasInterface(typeof(IDictionary)));
             if (isDictionary)
             {
                 return WriteDictionary<TSerializer>.WriteIDictionary;
             }
 
-            var isEnumerable = typeof(T).AssignableFrom(typeof(IEnumerable))
+            var isEnumerable = typeof(T).IsAssignableFrom(typeof(IEnumerable))
                 || typeof(T).HasInterface(typeof(IEnumerable));
             if (isEnumerable)
             {
                 return WriteListsOfElements<TSerializer>.WriteIEnumerable;
             }
 
-            if (typeof(T).HasInterface(typeof (IValueWriter)))
+            if (typeof(T).HasInterface(typeof(IValueWriter)))
                 return WriteValue;
 
-            if (typeof(T).IsClass() || typeof(T).IsInterface() || JsConfig.TreatAsRefType(typeof(T)))
+            if (typeof(T).IsClass || typeof(T).IsInterface || JsConfig.TreatAsRefType(typeof(T)))
             {
                 var typeToStringMethod = WriteType<T, TSerializer>.Write;
                 if (typeToStringMethod != null)
@@ -393,15 +440,14 @@ namespace ServiceStack.Text.Common
             return Serializer.WriteBuiltIn;
         }
 
-        public Dictionary<Type, WriteObjectDelegate> SpecialTypes;
+        public readonly Dictionary<Type, WriteObjectDelegate> SpecialTypes;
 
         public WriteObjectDelegate GetSpecialWriteFn(Type type)
         {
-            WriteObjectDelegate writeFn = null;
-            if (SpecialTypes.TryGetValue(type, out writeFn))
+            if (SpecialTypes.TryGetValue(type, out var writeFn))
                 return writeFn;
 
-            if (type.InstanceOfType(typeof(Type)))
+            if (type.IsInstanceOfType(typeof(Type)))
                 return WriteType;
 
             if (type.IsInstanceOf(typeof(Exception)))
@@ -413,6 +459,23 @@ namespace ServiceStack.Text.Common
         public void WriteType(TextWriter writer, object value)
         {
             Serializer.WriteRawString(writer, JsConfig.TypeWriter((Type)value));
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.NoOptimization)]
+        public static void InitAot<T>()
+        {
+            WriteListsOfElements<T, TSerializer>.WriteList(null, null);
+            WriteListsOfElements<T, TSerializer>.WriteIList(null, null);
+            WriteListsOfElements<T, TSerializer>.WriteEnumerable(null, null);
+            WriteListsOfElements<T, TSerializer>.WriteListValueType(null, null);
+            WriteListsOfElements<T, TSerializer>.WriteIListValueType(null, null);
+            WriteListsOfElements<T, TSerializer>.WriteGenericArrayValueType(null, null);
+            WriteListsOfElements<T, TSerializer>.WriteArray(null, null);
+
+            TranslateListWithElements<T>.LateBoundTranslateToGenericICollection(null, null);
+            TranslateListWithConvertibleElements<T, T>.LateBoundTranslateToGenericICollection(null, null);
+
+            QueryStringWriter<T>.WriteObject(null, null);
         }
     }
 }

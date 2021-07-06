@@ -5,15 +5,13 @@
 // Authors:
 //   Demis Bellot (demis.bellot@gmail.com)
 //
-// Copyright 2012 Service Stack LLC. All Rights Reserved.
+// Copyright 2012 ServiceStack, Inc. All Rights Reserved.
 //
 // Licensed under the same terms of ServiceStack.
 //
 
 using System;
 using System.Collections.Generic;
-using System.Reflection;
-using System.Linq;
 using System.Threading;
 
 namespace ServiceStack.Text.Common
@@ -24,15 +22,22 @@ namespace ServiceStack.Text.Common
         private static Dictionary<Type, ParseArrayOfElementsDelegate> ParseDelegateCache
             = new Dictionary<Type, ParseArrayOfElementsDelegate>();
 
-        private delegate object ParseArrayOfElementsDelegate(string value, ParseStringDelegate parseFn);
+        public delegate object ParseArrayOfElementsDelegate(ReadOnlySpan<char> value, ParseStringSpanDelegate parseFn);
 
         public static Func<string, ParseStringDelegate, object> GetParseFn(Type type)
         {
-            ParseArrayOfElementsDelegate parseFn;
-            if (ParseDelegateCache.TryGetValue(type, out parseFn)) return parseFn.Invoke;
+            var func = GetParseStringSpanFn(type);
+            return (s, d) => func(s.AsSpan(), v => d(v.ToString()));
+        }
+
+        private static readonly Type[] signature = {typeof(ReadOnlySpan<char>), typeof(ParseStringSpanDelegate)};
+
+        public static ParseArrayOfElementsDelegate GetParseStringSpanFn(Type type)
+        {
+            if (ParseDelegateCache.TryGetValue(type, out var parseFn)) return parseFn.Invoke;
 
             var genericType = typeof(DeserializeArrayWithElements<,>).MakeGenericType(type, typeof(TSerializer));
-            var mi = genericType.GetStaticMethod("ParseGenericArray");
+            var mi = genericType.GetStaticMethod("ParseGenericArray", signature);
             parseFn = (ParseArrayOfElementsDelegate)mi.CreateDelegate(typeof(ParseArrayOfElementsDelegate));
 
             Dictionary<Type, ParseArrayOfElementsDelegate> snapshot, newCache;
@@ -54,27 +59,26 @@ namespace ServiceStack.Text.Common
     {
         private static readonly ITypeSerializer Serializer = JsWriter.GetTypeSerializer<TSerializer>();
 
-        public static T[] ParseGenericArray(string value, ParseStringDelegate elementParseFn)
+        public static T[] ParseGenericArray(string value, ParseStringDelegate elementParseFn) =>
+            ParseGenericArray(value.AsSpan(), v => elementParseFn(v.ToString()));
+
+        public static T[] ParseGenericArray(ReadOnlySpan<char> value, ParseStringSpanDelegate elementParseFn)
         {
-            if ((value = DeserializeListWithElements<TSerializer>.StripList(value)) == null) return null;
-            if (value == string.Empty) return new T[0];
+            if ((value = DeserializeListWithElements<TSerializer>.StripList(value)).IsNullOrEmpty()) 
+                return value.IsEmpty ? null : new T[0];
 
             if (value[0] == JsWriter.MapStartChar)
             {
-                var itemValues = new List<string>();
+                var itemValues = new List<T>();
                 var i = 0;
                 do
                 {
-                    itemValues.Add(Serializer.EatTypeValue(value, ref i));
+                    var spanValue = Serializer.EatTypeValue(value, ref i);
+                    itemValues.Add((T)elementParseFn(spanValue));
                     Serializer.EatItemSeperatorOrMapEndChar(value, ref i);
                 } while (i < value.Length);
 
-                var results = new T[itemValues.Count];
-                for (var j = 0; j < itemValues.Count; j++)
-                {
-                    results[j] = (T)elementParseFn(itemValues[j]);
-                }
-                return results;
+                return itemValues.ToArray();
             }
             else
             {
@@ -104,26 +108,26 @@ namespace ServiceStack.Text.Common
     internal static class DeserializeArray<TSerializer>
         where TSerializer : ITypeSerializer
     {
-        private static Dictionary<Type, ParseStringDelegate> ParseDelegateCache = new Dictionary<Type, ParseStringDelegate>();
+        private static Dictionary<Type, ParseStringSpanDelegate> ParseDelegateCache = new Dictionary<Type, ParseStringSpanDelegate>();
 
-        public static ParseStringDelegate GetParseFn(Type type)
+        public static ParseStringDelegate GetParseFn(Type type) => v => GetParseStringSpanFn(type)(v.AsSpan());
+
+        public static ParseStringSpanDelegate GetParseStringSpanFn(Type type)
         {
-            ParseStringDelegate parseFn;
-            if (ParseDelegateCache.TryGetValue(type, out parseFn)) return parseFn;
+            if (ParseDelegateCache.TryGetValue(type, out var parseFn)) return parseFn;
 
             var genericType = typeof(DeserializeArray<,>).MakeGenericType(type, typeof(TSerializer));
 
-            var mi = genericType.GetStaticMethod("GetParseFn");
-            var parseFactoryFn = (Func<ParseStringDelegate>)mi.MakeDelegate(
-                typeof(Func<ParseStringDelegate>));
+            var mi = genericType.GetStaticMethod("GetParseStringSpanFn");
+            var parseFactoryFn = (Func<ParseStringSpanDelegate>)mi.MakeDelegate(
+                typeof(Func<ParseStringSpanDelegate>));
             parseFn = parseFactoryFn();
 
-            Dictionary<Type, ParseStringDelegate> snapshot, newCache;
+            Dictionary<Type, ParseStringSpanDelegate> snapshot, newCache;
             do
             {
                 snapshot = ParseDelegateCache;
-                newCache = new Dictionary<Type, ParseStringDelegate>(ParseDelegateCache);
-                newCache[type] = parseFn;
+                newCache = new Dictionary<Type, ParseStringSpanDelegate>(ParseDelegateCache) {[type] = parseFn};
 
             } while (!ReferenceEquals(
                 Interlocked.CompareExchange(ref ParseDelegateCache, newCache, snapshot), snapshot));
@@ -137,54 +141,64 @@ namespace ServiceStack.Text.Common
     {
         private static readonly ITypeSerializer Serializer = JsWriter.GetTypeSerializer<TSerializer>();
 
-        private static readonly ParseStringDelegate CacheFn;
+        private static readonly ParseStringSpanDelegate CacheFn;
 
         static DeserializeArray()
         {
-            CacheFn = GetParseFn();
+            CacheFn = GetParseStringSpanFn();
         }
 
-        public static ParseStringDelegate Parse
-        {
-            get { return CacheFn; }
-        }
+        public static ParseStringDelegate Parse => v => CacheFn(v.AsSpan());
 
-        public static ParseStringDelegate GetParseFn()
+        public static ParseStringSpanDelegate ParseStringSpan => CacheFn;
+
+        public static ParseStringDelegate GetParseFn() => v => GetParseStringSpanFn()(v.AsSpan());
+
+        public static ParseStringSpanDelegate GetParseStringSpanFn()
         {
             var type = typeof(T);
             if (!type.IsArray)
-                throw new ArgumentException(string.Format("Type {0} is not an Array type", type.FullName));
+                throw new ArgumentException($"Type {type.FullName} is not an Array type");
 
             if (type == typeof(string[]))
                 return ParseStringArray;
             if (type == typeof(byte[]))
-                return ParseByteArray;
+                return v => ParseByteArray(v.ToString());
 
             var elementType = type.GetElementType();
-            var elementParseFn = Serializer.GetParseFn(elementType);
+            var elementParseFn = Serializer.GetParseStringSpanFn(elementType);
             if (elementParseFn != null)
             {
-                var parseFn = DeserializeArrayWithElements<TSerializer>.GetParseFn(elementType);
+                var parseFn = DeserializeArrayWithElements<TSerializer>.GetParseStringSpanFn(elementType);
                 return value => parseFn(value, elementParseFn);
             }
             return null;
         }
 
-        public static string[] ParseStringArray(string value)
+        public static string[] ParseStringArray(ReadOnlySpan<char> value)
         {
-            if ((value = DeserializeListWithElements<TSerializer>.StripList(value)) == null) return null;
-            return value == string.Empty
-                    ? new string[0]
-                    : DeserializeListWithElements<TSerializer>.ParseStringList(value).ToArray();
+            if ((value = DeserializeListWithElements<TSerializer>.StripList(value)).IsNullOrEmpty()) 
+                return value.IsEmpty ? null : TypeConstants.EmptyStringArray;
+            return DeserializeListWithElements<TSerializer>.ParseStringList(value).ToArray();
         }
 
-        public static byte[] ParseByteArray(string value)
+        public static string[] ParseStringArray(string value) => ParseStringArray(value.AsSpan());
+
+        public static byte[] ParseByteArray(string value) => ParseByteArray(value.AsSpan());
+
+        public static byte[] ParseByteArray(ReadOnlySpan<char> value)
         {
-            if ((value = DeserializeListWithElements<TSerializer>.StripList(value)) == null) return null;
-            if ((value = Serializer.UnescapeString(value)) == null) return null;
-            return value == string.Empty
-                    ? new byte[0]
-                    : Convert.FromBase64String(value);
+            var isArray = value.Length > 1 && value[0] == '[';
+            
+            if ((value = DeserializeListWithElements<TSerializer>.StripList(value)).IsNullOrEmpty()) 
+                return value.IsEmpty ? null : TypeConstants.EmptyByteArray;
+
+            if ((value = Serializer.UnescapeString(value)).IsNullOrEmpty()) 
+                return TypeConstants.EmptyByteArray;
+            
+            return !isArray 
+                ? value.ParseBase64()
+                : DeserializeListWithElements<TSerializer>.ParseByteList(value).ToArray();
         }
     }
 }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using ServiceStack.Text.Common;
 
 namespace ServiceStack.Text
@@ -11,15 +12,19 @@ namespace ServiceStack.Text
             Reset();
         }
 
+        private static CultureInfo sRealNumberCultureInfo;
+        public static CultureInfo RealNumberCultureInfo
+        {
+            get => sRealNumberCultureInfo ?? CultureInfo.InvariantCulture;
+            set => sRealNumberCultureInfo = value;
+        }
+
         [ThreadStatic]
         private static string tsItemSeperatorString;
         private static string sItemSeperatorString;
         public static string ItemSeperatorString
         {
-            get
-            {
-                return tsItemSeperatorString ?? sItemSeperatorString ?? JsWriter.ItemSeperatorString;
-            }
+            get => tsItemSeperatorString ?? sItemSeperatorString ?? JsWriter.ItemSeperatorString;
             set
             {
                 tsItemSeperatorString = value;
@@ -33,10 +38,7 @@ namespace ServiceStack.Text
         private static string sItemDelimiterString;
         public static string ItemDelimiterString
         {
-            get
-            {
-                return tsItemDelimiterString ?? sItemDelimiterString ?? JsWriter.QuoteString;
-            }
+            get => tsItemDelimiterString ?? sItemDelimiterString ?? JsWriter.QuoteString;
             set
             {
                 tsItemDelimiterString = value;
@@ -53,10 +55,7 @@ namespace ServiceStack.Text
         private static string sEscapedItemDelimiterString;
         internal static string EscapedItemDelimiterString
         {
-            get
-            {
-                return tsEscapedItemDelimiterString ?? sEscapedItemDelimiterString ?? DefaultEscapedItemDelimiterString;
-            }
+            get => tsEscapedItemDelimiterString ?? sEscapedItemDelimiterString ?? DefaultEscapedItemDelimiterString;
             set
             {
                 tsEscapedItemDelimiterString = value;
@@ -71,10 +70,7 @@ namespace ServiceStack.Text
         private static string[] sEscapeStrings;
         public static string[] EscapeStrings
         {
-            get
-            {
-                return tsEscapeStrings ?? sEscapeStrings ?? defaultEscapeStrings;
-            }
+            get => tsEscapeStrings ?? sEscapeStrings ?? defaultEscapeStrings;
             private set
             {
                 tsEscapeStrings = value;
@@ -97,10 +93,7 @@ namespace ServiceStack.Text
         private static string sRowSeparatorString;
         public static string RowSeparatorString
         {
-            get
-            {
-                return tsRowSeparatorString ?? sRowSeparatorString ?? Environment.NewLine;
-            }
+            get => tsRowSeparatorString ?? sRowSeparatorString ?? "\r\n";
             set
             {
                 tsRowSeparatorString = value;
@@ -127,15 +120,13 @@ namespace ServiceStack.Text
         private static Dictionary<string, string> customHeadersMap;
         public static Dictionary<string, string> CustomHeadersMap
         {
-            get
-            {
-                return customHeadersMap;
-            }
+            get => customHeadersMap;
             set
             {
                 customHeadersMap = value;
                 if (value == null) return;
                 CsvWriter<T>.ConfigureCustomHeaders(customHeadersMap);
+                CsvReader<T>.ConfigureCustomHeaders(customHeadersMap);
             }
         }
 
@@ -144,19 +135,19 @@ namespace ServiceStack.Text
             set
             {
                 if (value == null) return;
-                if (value.GetType().IsValueType())
+                if (value.GetType().IsValueType)
                     throw new ArgumentException("CustomHeaders is a ValueType");
 
-                var propertyInfos = value.GetType().GetPropertyInfos();
+                var propertyInfos = value.GetType().GetProperties();
                 if (propertyInfos.Length == 0) return;
 
                 customHeadersMap = new Dictionary<string, string>();
                 foreach (var pi in propertyInfos)
                 {
-                    var getMethod = pi.GetMethodInfo();
+                    var getMethod = pi.GetGetMethod(nonPublic:true);
                     if (getMethod == null) continue;
 
-                    var oValue = getMethod.Invoke(value, new object[0]);
+                    var oValue = getMethod.Invoke(value, TypeConstants.EmptyObjectArray);
                     if (oValue == null) continue;
                     customHeadersMap[pi.Name] = oValue.ToString();
                 }

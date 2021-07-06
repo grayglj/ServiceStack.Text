@@ -5,7 +5,7 @@
 // Authors:
 //   Demis Bellot (demis.bellot@gmail.com)
 //
-// Copyright 2012 Service Stack LLC. All Rights Reserved.
+// Copyright 2012 ServiceStack, Inc. All Rights Reserved.
 //
 // Licensed under the same terms of ServiceStack.
 //
@@ -179,10 +179,26 @@ namespace ServiceStack.Text.Common
 
             var valueCollection = (IEnumerable)oValueCollection;
             var ranOnce = false;
+            Type lastType = null;
             foreach (var valueItem in valueCollection)
             {
-                if (toStringFn == null)
-                    toStringFn = Serializer.GetWriteFn(valueItem.GetType());
+                if ((toStringFn == null) || (valueItem != null && valueItem.GetType() != lastType))
+                {
+                    if (valueItem != null)
+                    {
+                        if (valueItem.GetType() != lastType)
+                        {
+                            lastType = valueItem.GetType();
+                            toStringFn = Serializer.GetWriteFn(lastType);
+                        }
+                    }
+                    else
+                    {
+                        // this can happen if the first item in the collection was null
+                        lastType = typeof(object);
+                        toStringFn = Serializer.GetWriteFn(lastType);
+                    }
+                }
 
                 JsWriter.WriteItemSeperatorIfRanOnce(writer, ref ranOnce);
 
@@ -200,7 +216,20 @@ namespace ServiceStack.Text.Common
 
         static WriteListsOfElements()
         {
-            ElementWriteFn = JsWriter.GetTypeSerializer<TSerializer>().GetWriteFn<T>();
+            var fn = JsWriter.GetTypeSerializer<TSerializer>().GetWriteFn<T>();
+            ElementWriteFn = (writer, obj) => {
+                try 
+                { 
+                    if (!JsState.Traverse(obj))
+                        return;
+                    
+                    fn(writer, obj);
+                }
+                finally 
+                {
+                    JsState.UnTraverse();
+                }
+            };
         }
 
         public static void WriteList(TextWriter writer, object oList)
@@ -483,12 +512,12 @@ namespace ServiceStack.Text.Common
             if (type == typeof(IList<long>))
                 return WriteListsOfElements<long, TSerializer>.WriteIListValueType;
 
-            var elementType = listInterface.GenericTypeArguments()[0];
+            var elementType = listInterface.GetGenericArguments()[0];
 
-            var isGenericList = typeof(T).IsGeneric()
-                && typeof(T).GenericTypeDefinition() == typeof(List<>);
+            var isGenericList = typeof(T).IsGenericType
+                && typeof(T).GetGenericTypeDefinition() == typeof(List<>);
 
-            if (elementType.IsValueType()
+            if (elementType.IsValueType
                 && JsWriter.ShouldUseDefaultToStringMethod(elementType))
             {
                 if (isGenericList)

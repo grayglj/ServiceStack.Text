@@ -2,92 +2,74 @@ using System;
 using System.Globalization;
 using System.Threading;
 using NUnit.Framework;
+using ServiceStack.Text.Tests.Support;
 
 namespace ServiceStack.Text.Tests
 {
-	[TestFixture]
-	public class CultureInfoTests
-		: TestBase
-	{
-		public class Point
-		{
-			public double Latitude { get; set; }
-			public double Longitude { get; set; }
+    [TestFixture]
+    public class CultureInfoTests
+        : TestBase
+    {
 
-			public bool Equals(Point other)
-			{
-				if (ReferenceEquals(null, other)) return false;
-				if (ReferenceEquals(this, other)) return true;
-				return other.Latitude == Latitude && other.Longitude == Longitude;
-			}
+        private CultureInfo previousCulture = CultureInfo.InvariantCulture;
 
-			public override bool Equals(object obj)
-			{
-				if (ReferenceEquals(null, obj)) return false;
-				if (ReferenceEquals(this, obj)) return true;
-				if (obj.GetType() != typeof(Point)) return false;
-				return Equals((Point)obj);
-			}
+        [OneTimeSetUp]
+        public void TestFixtureSetUp()
+        {
+#if NETCORE
+			previousCulture = CultureInfo.CurrentCulture;
+			CultureInfo.CurrentCulture = new CultureInfo("fr-FR");
+#else
+            previousCulture = Thread.CurrentThread.CurrentCulture;
+            //Thread.CurrentThread.CurrentCulture = new CultureInfo("pt-BR");
+            Thread.CurrentThread.CurrentCulture = new CultureInfo("fr-FR");
+            Thread.CurrentThread.CurrentUICulture = new CultureInfo("fr-FR");
+#endif
+        }
 
-			public override int GetHashCode()
-			{
-				unchecked
-				{
-					return (Latitude.GetHashCode() * 397) ^ Longitude.GetHashCode();
-				}
-			}
-		}
+        [OneTimeTearDown]
+        public void TestFixtureTearDown()
+        {
+#if NETCORE
+			CultureInfo.CurrentCulture = previousCulture;
+#else
+            Thread.CurrentThread.CurrentCulture = previousCulture;
+#endif
+        }
 
-		private CultureInfo previousCulture = CultureInfo.InvariantCulture;
+        [Test]
+        public void Can_deserialize_type_with_doubles_in_different_culture()
+        {
+            var point = new Point { Latitude = -23.5707, Longitude = -46.57239 };
+            SerializeAndCompare(point);
+        }
 
-		[TestFixtureSetUp]
-		public void TestFixtureSetUp()
-		{
-			previousCulture = Thread.CurrentThread.CurrentCulture;
-			//Thread.CurrentThread.CurrentCulture = new CultureInfo("pt-BR");
-			Thread.CurrentThread.CurrentCulture = new CultureInfo("fr-FR");
-			Thread.CurrentThread.CurrentUICulture = new CultureInfo("fr-FR");
-		}
+        [Test]
+        public void Can_deserialize_type_with_Single_in_different_culture()
+        {
+            Single single = (float)1.123;
+            var txt = TypeSerializer.SerializeToString(single);
 
-		[TestFixtureTearDown]
-		public void TestFixtureTearDown()
-		{
-			Thread.CurrentThread.CurrentCulture = previousCulture;
-		}
+            Console.WriteLine(txt);
+        }
 
-		[Test]
-		public void Can_deserialize_type_with_doubles_in_different_culture()
-		{
-			var point = new Point { Latitude = -23.5707, Longitude = -46.57239 };
-			SerializeAndCompare(point);
-		}
+        [Test]
+        public void Serializes_doubles_using_InvariantCulture()
+        {
+            //Used in RedisClient
+            var doubleUtf8 = 66121.202.ToUtf8Bytes();
+            var doubleStr = doubleUtf8.FromUtf8Bytes();
+            Assert.That(doubleStr, Is.EqualTo("66121.202"));
+        }
 
-		[Test]
-		public void Can_deserialize_type_with_Single_in_different_culture()
-		{
-			Single single = (float) 1.123;
-			var txt = TypeSerializer.SerializeToString(single);
-
-			Console.WriteLine(txt);
-		}
-
-		[Test]
-		public void Serializes_doubles_using_InvariantCulture()
-		{
-			//Used in RedisClient
-			var doubleUtf8 = 66121.202.ToUtf8Bytes();
-			var doubleStr = doubleUtf8.FromUtf8Bytes();
-			Assert.That(doubleStr, Is.EqualTo("66121.202"));
-		}
-
-		[Test]
-		public void Serializes_long_double_without_E_notation()
-		{
-			//Used in RedisClient
-			var doubleUtf8 = 1234567890123456d.ToUtf8Bytes();
-			var doubleStr = doubleUtf8.FromUtf8Bytes();
-			Assert.That(doubleStr, Is.EqualTo("1234567890123456"));
-		}
+        [Test]
+        public void Serializes_long_double_without_E_notation()
+        {
+            //Used in RedisClient
+            var doubleUtf8 = 1234567890123456d.ToUtf8Bytes();
+            var doubleStr = doubleUtf8.FromUtf8Bytes();
+            Assert.That(doubleStr, Is.EqualTo("1234567890123456"));
+        }
 
         public class NumberClass
         {
@@ -103,29 +85,29 @@ namespace ServiceStack.Text.Tests
             {
                 return new NumberClass
                 {
-                    IntValue = i*1000,
-                    UIntValue = (uint) (i * 1000),
+                    IntValue = i * 1000,
+                    UIntValue = (uint)(i * 1000),
                     LongValue = i * 1000,
-                    ULongValue = (ulong) (i * 1000),
-                    FloatValue = (float) (i * 1000 + .999),
+                    ULongValue = (ulong)(i * 1000),
+                    FloatValue = (float)(i * 1000 + .999),
                     DoubleValue = i * 1000 + .999,
-                    DecimalValue = (decimal) (i * 1000 + .999),
+                    DecimalValue = (decimal)(i * 1000 + .999),
                 };
             }
         }
 
-	    [Test]
-	    public void Does_use_invariant_culture_for_numbers()
-	    {
-	        var dto = NumberClass.Create(1);
+        [Test]
+        public void Does_use_invariant_culture_for_numbers()
+        {
+            var dto = NumberClass.Create(1);
             dto.ToJson().Print();
             dto.ToJsv().Print();
             dto.ToCsv().Print();
 
-            Assert.That(dto.ToJson(), Is.Not.StringContaining("1000,9"));
-            Assert.That(dto.ToJsv(), Is.Not.StringContaining("1000,9"));
-            Assert.That(dto.ToCsv(), Is.Not.StringContaining("1000,9"));
-	    }
+            Assert.That(dto.ToJson(), Does.Not.Contain("1000,9"));
+            Assert.That(dto.ToJsv(), Does.Not.Contain("1000,9"));
+            Assert.That(dto.ToCsv(), Does.Not.Contain("1000,9"));
+        }
 
-	}
+    }
 }

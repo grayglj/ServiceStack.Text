@@ -1,8 +1,9 @@
-﻿// Copyright (c) Service Stack LLC. All Rights Reserved.
+﻿// Copyright (c) ServiceStack, Inc. All Rights Reserved.
 // License: https://raw.github.com/ServiceStack/ServiceStack/master/license.txt
 
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -10,20 +11,13 @@ namespace ServiceStack
 {
     public static class TaskUtils
     {
-        public static Task<T> FromResult<T>(T result)
-        {
-            var taskSource = new TaskCompletionSource<T>();
-            taskSource.SetResult(result);
-            return taskSource.Task;
-        }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static Task<T> FromResult<T>(T result) => Task.FromResult(result);
 
-        public static Task<T> InTask<T>(this T result)
-        {
-            var taskSource = new TaskCompletionSource<T>();
-            taskSource.SetResult(result);
-            return taskSource.Task;
-        }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static Task<T> InTask<T>(this T result) => Task.FromResult(result);
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static Task<T> InTask<T>(this Exception ex)
         {
             var taskSource = new TaskCompletionSource<T>();
@@ -31,15 +25,10 @@ namespace ServiceStack
             return taskSource.Task;
         }
 
-        public static bool IsSuccess(this Task task)
-        {
-            return !task.IsFaulted && task.IsCompleted;
-        }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool IsSuccess(this Task task) => !task.IsFaulted && task.IsCompleted;
 
-        public static Task<To> Cast<From, To>(this Task<From> task) where To : From
-        {
-            return task.Then(x => (To)x);
-        }
+        public static Task<To> Cast<From, To>(this Task<From> task) where To : From => task.Then(x => (To)x);
 
         public static TaskScheduler SafeTaskScheduler()
         {
@@ -144,8 +133,17 @@ namespace ServiceStack
 
             i++;
 
-            if (iterationTask != null)
-                iterationTask.ContinueWith(next, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            iterationTask?.ContinueWith(next, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
+
+        public static void Sleep(int timeMs)
+        {
+            Thread.Sleep(timeMs);
+        }
+
+        public static void Sleep(TimeSpan time)
+        {
+            Thread.Sleep(time);
         }
     }
 }

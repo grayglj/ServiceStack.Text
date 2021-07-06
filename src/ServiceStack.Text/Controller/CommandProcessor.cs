@@ -5,7 +5,7 @@
 // Authors:
 //   Demis Bellot (demis.bellot@gmail.com)
 //
-// Copyright 2012 Service Stack LLC. All Rights Reserved.
+// Copyright 2012 ServiceStack, Inc. All Rights Reserved.
 //
 // Licensed under the same terms of ServiceStack.
 //
@@ -42,16 +42,13 @@ namespace ServiceStack.Text.Controller
 
 			var pathInfo = PathInfo.Parse(actionParts[1]);
 
-			object context;
-			if (!this.contextMap.TryGetValue(controllerName, out context))
-			{
-				throw new Exception("UnknownContext: " + controllerName);
-			}
+		    if (!this.contextMap.TryGetValue(controllerName, out var context))
+		        throw new Exception("UnknownContext: " + controllerName);
 
-			var methodName = pathInfo.ActionName;
+            var methodName = pathInfo.ActionName;
 
-            var method = context.GetType().GetMethodInfos().First(
-                c => c.Name == methodName && c.GetParameters().Count() == pathInfo.Arguments.Count);
+            var method = context.GetType().GetMethods().First(
+                c => c.Name == methodName && c.GetParameters().Length == pathInfo.Arguments.Count);
 
 			var methodParamTypes = method.GetParameters().Select(x => x.ParameterType);
 

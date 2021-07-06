@@ -1,7 +1,5 @@
-//Copyright (c) Service Stack LLC. All Rights Reserved.
+//Copyright (c) ServiceStack, Inc. All Rights Reserved.
 //License: https://raw.github.com/ServiceStack/ServiceStack/master/license.txt
-
-#if !PCL
 
 using System;
 using System.Collections.Generic;
@@ -10,7 +8,9 @@ using ServiceStack.Text;
 using ServiceStack.Text.Common;
 using ServiceStack.Text.Json;
 using System.Linq;
-using System.Text;
+
+using System.Reflection;
+using System.Reflection.Emit;
 
 namespace ServiceStack
 {
@@ -19,18 +19,19 @@ namespace ServiceStack
     {
         private static readonly ITypeSerializer Serializer = JsWriter.GetTypeSerializer<TSerializer>();
 
-        private static readonly ParseStringDelegate CachedParseFn;
+        private static readonly ParseStringSpanDelegate CachedParseFn;
         static DeserializeDynamic()
         {
             CachedParseFn = ParseDynamic;
         }
 
-        public static ParseStringDelegate Parse
-        {
-            get { return CachedParseFn; }
-        }
+        public static ParseStringDelegate Parse => v => CachedParseFn(v.AsSpan());
 
-        public static IDynamicMetaObjectProvider ParseDynamic(string value)
+        public static ParseStringSpanDelegate ParseStringSpan => CachedParseFn;
+
+        public static IDynamicMetaObjectProvider ParseDynamic(string value) => ParseDynamic(value.AsSpan());
+
+        public static IDynamicMetaObjectProvider ParseDynamic(ReadOnlySpan<char> value)
         {
             var index = VerifyAndGetStartIndex(value, typeof(ExpandoObject));
 
@@ -49,7 +50,7 @@ namespace ServiceStack
                 Serializer.EatMapKeySeperator(value, ref index);
                 var elementValue = Serializer.EatValue(value, ref index);
 
-                var mapKey = Serializer.UnescapeString(keyValue);
+                var mapKey = Serializer.UnescapeString(keyValue).ToString();
 
                 if (JsonUtils.IsJsObject(elementValue))
                 {
@@ -57,15 +58,15 @@ namespace ServiceStack
                 }
                 else if (JsonUtils.IsJsArray(elementValue))
                 {
-                    container[mapKey] = DeserializeList<List<object>, TSerializer>.Parse(elementValue);
+                    container[mapKey] = DeserializeList<List<object>, TSerializer>.ParseStringSpan(elementValue);
                 }
                 else if (tryToParsePrimitiveTypes)
                 {
-                    container[mapKey] = DeserializeType<TSerializer>.ParsePrimitive(elementValue) ?? Serializer.UnescapeString(elementValue);
+                    container[mapKey] = DeserializeType<TSerializer>.ParsePrimitive(elementValue) ?? Serializer.UnescapeString(elementValue).Value();
                 }
                 else
                 {
-                    container[mapKey] = Serializer.UnescapeString(elementValue);
+                    container[mapKey] = Serializer.UnescapeString(elementValue).Value();
                 }
 
                 Serializer.EatItemSeperatorOrMapEndChar(value, ref index);
@@ -74,7 +75,7 @@ namespace ServiceStack
             return result;
         }
 
-        private static int VerifyAndGetStartIndex(string value, Type createMapType)
+        private static int VerifyAndGetStartIndex(ReadOnlySpan<char> value, Type createMapType)
         {
             var index = 0;
             if (!Serializer.EatMapStartChar(value, ref index))
@@ -142,6 +143,15 @@ namespace ServiceStack
                     result = Deserialize(json);
                     return true;
                 }
+                else if (json.TrimStart(' ').StartsWith("[", StringComparison.Ordinal))
+                {
+                    result = JsonArrayObjects.Parse(json).Select(a =>
+                    {
+                        var hash = a.ToDictionary<KeyValuePair<string, string>, string, object>(entry => entry.Key, entry => entry.Value);
+                        return new DynamicJson(hash);
+                    }).ToArray();
+                    return true;
+                }
                 result = json;
                 return _hash[name] == result;
             }
@@ -156,7 +166,7 @@ namespace ServiceStack
 
         internal static string Underscored(IEnumerable<char> pascalCase)
         {
-            var sb = new StringBuilder();
+            var sb = StringBuilderCache.Allocate();
             var i = 0;
             foreach (var c in pascalCase)
             {
@@ -167,9 +177,7 @@ namespace ServiceStack
                 sb.Append(c);
                 i++;
             }
-            return sb.ToString().ToLowerInvariant();
+            return StringBuilderCache.ReturnAndFree(sb).ToLowerInvariant();
         }
     }
 }
-
-#endif

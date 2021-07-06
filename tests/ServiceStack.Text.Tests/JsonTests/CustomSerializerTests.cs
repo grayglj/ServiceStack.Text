@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using NUnit.Framework;
 using System.Runtime.Serialization;
+using System.Threading;
 
 namespace ServiceStack.Text.Tests.JsonTests
 {
@@ -15,7 +16,7 @@ namespace ServiceStack.Text.Tests.JsonTests
             JsConfig<EntityWithValues>.RawDeserializeFn = DeserializeEntity;
         }
 
-        [TestFixtureTearDown]
+        [OneTimeTearDown]
         public void TestFixtureTearDown()
         {
             JsConfig.Reset();
@@ -184,7 +185,7 @@ namespace ServiceStack.Text.Tests.JsonTests
         [Test]
         public void Can_detect_dto_with_no_Version()
         {
-            using (JsConfig.With(modelFactory: type =>
+            using (JsConfig.With(new Config { ModelFactory = type =>
             {
                 if (typeof(IHasVersion).IsAssignableFrom(type))
                 {
@@ -196,7 +197,7 @@ namespace ServiceStack.Text.Tests.JsonTests
                     };
                 }
                 return type.CreateInstance;
-            }))
+            }}))
             {
                 var dto = new Dto { Name = "Foo" };
                 var fromDto = dto.ToJson().FromJson<DtoV1>();
@@ -225,7 +226,7 @@ namespace ServiceStack.Text.Tests.JsonTests
 
             Assert.That(dto.ErrorCode, Is.Null);
 
-            using (JsConfig.With(propertyConvention: PropertyConvention.Lenient))
+            using (JsConfig.With(new Config { PropertyConvention = PropertyConvention.Lenient }))
             {
                 dto = json.FromJson<ErrorPoco>();
 
@@ -276,7 +277,7 @@ namespace ServiceStack.Text.Tests.JsonTests
 
             var dto = new ModelInt { Int = 0 };
 
-            using (JsConfig.With(includeNullValues: true))
+            using (JsConfig.With(new Config { IncludeNullValues = true }))
             {
                 Assert.That(dto.ToJson(), Is.EqualTo("{\"Int\":-1}"));
             }
@@ -293,13 +294,75 @@ namespace ServiceStack.Text.Tests.JsonTests
         public void Can_customize_JSON_decimal()
         {
             JsConfig<decimal>.RawSerializeFn = d =>
-                d.ToString(CultureInfo.CreateSpecificCulture("nl-NL"));
+                d.ToString(new CultureInfo("nl-NL"));
 
             var dto = new ModelDecimal { Decimal = 1.33m };
 
             Assert.That(dto.ToCsv(), Is.EqualTo("Decimal\r\n\"1,33\"\r\n"));
             Assert.That(dto.ToJsv(), Is.EqualTo("{Decimal:1,33}"));
             Assert.That(dto.ToJson(), Is.EqualTo("{\"Decimal\":1,33}"));
+        }
+
+        public class FormatAttribute : Attribute
+        {
+            string Format;
+
+            public FormatAttribute(string format)
+            {
+                Format = format;
+            }
+        }
+
+        public class DcStatus
+        {
+            [Format("{0:0.0} V")]
+            public double Voltage { get; set; }
+
+            [Format("{0:0.000} A")]
+            public double Current { get; set; }
+
+            [Format("{0:0} W")]
+            public double Power => Voltage * Current;
+
+            public string ToJson()
+            {
+                return new Dictionary<string, string>
+                {
+                    { "Voltage", string.Format(CultureInfo.InvariantCulture, "{0:0.0} V", Voltage)},
+                    { "Current", string.Format(CultureInfo.InvariantCulture, "{0:0.000} A", Current)}, // Use $"{Current:0.000} A" if you don't care about culture
+                    { "Power", $"{Power:0} W"},
+                }.ToJson();
+            }
+        }
+
+        public class DcStatusRawFn
+        {
+            [Format("{0:0.0} V")]
+            public double Voltage { get; set; }
+
+            [Format("{0:0.000} A")]
+            public double Current { get; set; }
+
+            [Format("{0:0} W")]
+            public double Power => Voltage * Current;
+        }
+
+        [Test]
+        public void Can_deserialize_using_CustomFormat()
+        {
+            var test = new DcStatus { Voltage = 10, Current = 1.2 };
+            Assert.That(test.ToJson(), Is.EqualTo("{\"Voltage\":\"10.0 V\",\"Current\":\"1.200 A\",\"Power\":\"12 W\"}"));
+
+            JsConfig<DcStatusRawFn>.RawSerializeFn = o => new Dictionary<string, string> {
+                { "Voltage", string.Format(CultureInfo.InvariantCulture, "{0:0.0} V", o.Voltage)},
+                { "Current", string.Format(CultureInfo.InvariantCulture, "{0:0.000} A", o.Current)},
+                { "Power", $"{o.Power:0} W"},
+            }.ToJson();
+
+            var test2 = new DcStatusRawFn { Voltage = 10, Current = 1.2 };
+            Assert.That(test2.ToJson(), Is.EqualTo("{\"Voltage\":\"10.0 V\",\"Current\":\"1.200 A\",\"Power\":\"12 W\"}"));
+
+            JsConfig.Reset();
         }
     }
 

@@ -5,14 +5,12 @@
 // Authors:
 //   Demis Bellot (demis.bellot@gmail.com)
 //
-// Copyright 2012 Service Stack LLC. All Rights Reserved.
+// Copyright 2012 ServiceStack, Inc. All Rights Reserved.
 //
 // Licensed under the same terms of ServiceStack.
 //
 
 using System;
-using System.Reflection;
-using System.Linq;
 using ServiceStack.Text.Jsv;
 
 namespace ServiceStack.Text.Common
@@ -25,7 +23,7 @@ namespace ServiceStack.Text.Common
         {
             // Get the static Parse(string) method on the type supplied
             var parseMethodInfo = typeof(T).GetStaticMethod(parseMethod, new[] { typeof(string) });
-            if (parseMethodInfo == null) 
+            if (parseMethodInfo == null)
                 return null;
 
             ParseDelegate parseDelegate = null;
@@ -52,22 +50,57 @@ namespace ServiceStack.Text.Common
 
             return null;
         }
+
+        delegate T ParseStringSpanGenericDelegate<T>(ReadOnlySpan<char> value);
+
+        public static ParseStringSpanDelegate GetParseStringSpanFn<T>(string parseMethod)
+        {
+            // Get the static Parse(string) method on the type supplied
+            var parseMethodInfo = typeof(T).GetStaticMethod(parseMethod, new[] { typeof(string) });
+            if (parseMethodInfo == null)
+                return null;
+
+            ParseStringSpanDelegate parseDelegate = null;
+            try
+            {
+                if (parseMethodInfo.ReturnType != typeof(T))
+                {
+                    parseDelegate = (ParseStringSpanDelegate)parseMethodInfo.MakeDelegate(typeof(ParseStringSpanDelegate), false);
+                }
+                if (parseDelegate == null)
+                {
+                    //Try wrapping strongly-typed return with wrapper fn.
+                    var typedParseDelegate = (ParseStringSpanGenericDelegate<T>)parseMethodInfo.MakeDelegate(typeof(ParseStringSpanGenericDelegate<T>));
+                    parseDelegate = x => typedParseDelegate(x);
+                }
+            }
+            catch (ArgumentException)
+            {
+                Tracer.Instance.WriteDebug("Nonstandard Parse method on type {0}", typeof(T));
+            }
+
+            if (parseDelegate != null)
+                return value => parseDelegate(value.ToString().FromCsvField().AsSpan());
+
+            return null;
+        }
     }
 
     public static class StaticParseMethod<T>
     {
         const string ParseMethod = "Parse";
+        const string ParseStringSpanMethod = "ParseStringSpanMethod";
 
         private static readonly ParseStringDelegate CacheFn;
+        private static readonly ParseStringSpanDelegate CacheStringSpanFn;
 
-        public static ParseStringDelegate Parse
-        {
-            get { return CacheFn; }
-        }
+        public static ParseStringDelegate Parse => CacheFn;
+        public static ParseStringSpanDelegate ParseStringSpan => CacheStringSpanFn;
 
         static StaticParseMethod()
         {
             CacheFn = ParseMethodUtilities.GetParseFn<T>(ParseMethod);
+            CacheStringSpanFn = ParseMethodUtilities.GetParseStringSpanFn<T>(ParseMethod);
         }
 
     }
@@ -79,16 +112,20 @@ namespace ServiceStack.Text.Common
             ? "ParseJsv"
             : "ParseJson";
 
-        private static readonly ParseStringDelegate CacheFn;
+        static readonly string ParseStringSpanMethod = typeof(TSerializer) == typeof(JsvTypeSerializer)
+            ? "ParseStringSpanJsv"
+            : "ParseStringSpanJson";
 
-        public static ParseStringDelegate Parse
-        {
-            get { return CacheFn; }
-        }
+        private static readonly ParseStringDelegate CacheFn;
+        private static readonly ParseStringSpanDelegate CacheStringSpanFn;
+
+        public static ParseStringDelegate Parse => CacheFn;
+        public static ParseStringSpanDelegate ParseStringSpan => CacheStringSpanFn;
 
         static StaticParseRefTypeMethod()
         {
             CacheFn = ParseMethodUtilities.GetParseFn<T>(ParseMethod);
+            CacheStringSpanFn = ParseMethodUtilities.GetParseStringSpanFn<T>(ParseStringSpanMethod);
         }
     }
 

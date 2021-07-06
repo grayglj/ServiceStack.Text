@@ -5,7 +5,7 @@
 // Authors:
 //   Demis Bellot (demis.bellot@gmail.com)
 //
-// Copyright 2012 Service Stack LLC. All Rights Reserved.
+// Copyright 2012 ServiceStack, Inc. All Rights Reserved.
 //
 // Licensed under the same terms of ServiceStack.
 //
@@ -72,9 +72,8 @@ namespace ServiceStack.Text.Common
         public static Action<TextWriter, object, WriteObjectDelegate, WriteObjectDelegate>
             GetWriteGenericDictionary(Type keyType, Type valueType)
         {
-            WriteMapDelegate writeFn;
             var mapKey = new MapKey(keyType, valueType);
-            if (CacheFns.TryGetValue(mapKey, out writeFn)) return writeFn.Invoke;
+            if (CacheFns.TryGetValue(mapKey, out var writeFn)) return writeFn.Invoke;
 
             var genericType = typeof(ToStringDictionaryMethods<,,>).MakeGenericType(keyType, valueType, typeof(TSerializer));
             var mi = genericType.GetStaticMethod("WriteIDictionary");
@@ -110,7 +109,7 @@ namespace ServiceStack.Text.Common
                 var dictionaryValue = map[key];
 
                 var isNull = (dictionaryValue == null);
-                if (isNull && !Serializer.IncludeNullValues) continue;
+                if (isNull && !Serializer.IncludeNullValuesInDictionaries) continue;
 
                 var keyType = key.GetType();
                 if (writeKeyFn == null || lastKeyType != keyType)
@@ -123,21 +122,31 @@ namespace ServiceStack.Text.Common
                 JsWriter.WriteItemSeperatorIfRanOnce(writer, ref ranOnce);
 
                 JsState.WritingKeyCount++;
-                JsState.IsWritingValue = false;
-
-                if (encodeMapKey)
+                try
                 {
-                    JsState.IsWritingValue = true; //prevent ""null""
-                    writer.Write(JsWriter.QuoteChar);
-                    writeKeyFn(writer, key);
-                    writer.Write(JsWriter.QuoteChar);
+                    if (encodeMapKey)
+                    {
+                        JsState.IsWritingValue = true; //prevent ""null""
+                        try
+                        {
+                            writer.Write(JsWriter.QuoteChar);
+                            writeKeyFn(writer, key);
+                            writer.Write(JsWriter.QuoteChar);
+                        }
+                        finally
+                        {
+                            JsState.IsWritingValue = false;
+                        }
+                    }
+                    else
+                    {
+                        writeKeyFn(writer, key);
+                    }
                 }
-                else
+                finally
                 {
-                    writeKeyFn(writer, key);
+                    JsState.WritingKeyCount--;
                 }
-
-                JsState.WritingKeyCount--;
 
                 writer.Write(JsWriter.MapKeySeperator);
 
@@ -155,8 +164,14 @@ namespace ServiceStack.Text.Common
                     }
 
                     JsState.IsWritingValue = true;
-                    writeValueFn(writer, dictionaryValue);
-                    JsState.IsWritingValue = false;
+                    try
+                    {
+                        writeValueFn(writer, dictionaryValue);
+                    }
+                    finally
+                    {
+                        JsState.IsWritingValue = false;
+                    }
                 }
             }
 
@@ -198,26 +213,36 @@ namespace ServiceStack.Text.Common
             foreach (var kvp in map)
             {
                 var isNull = (kvp.Value == null);
-                if (isNull && !Serializer.IncludeNullValues) continue;
+                if (isNull && !Serializer.IncludeNullValuesInDictionaries) continue;
 
                 JsWriter.WriteItemSeperatorIfRanOnce(writer, ref ranOnce);
 
                 JsState.WritingKeyCount++;
-                JsState.IsWritingValue = false;
-
-                if (encodeMapKey)
+                try
                 {
-                    JsState.IsWritingValue = true; //prevent ""null""
-                    writer.Write(JsWriter.QuoteChar);
-                    writeKeyFn(writer, kvp.Key);
-                    writer.Write(JsWriter.QuoteChar);
+                    if (encodeMapKey)
+                    {
+                        JsState.IsWritingValue = true; //prevent ""null""
+                        try
+                        {
+                            writer.Write(JsWriter.QuoteChar);
+                            writeKeyFn(writer, kvp.Key);
+                            writer.Write(JsWriter.QuoteChar);
+                        }
+                        finally
+                        {
+                            JsState.IsWritingValue = false;
+                        }
+                    }
+                    else
+                    {
+                        writeKeyFn(writer, kvp.Key);
+                    }
                 }
-                else
+                finally
                 {
-                    writeKeyFn(writer, kvp.Key);
+                    JsState.WritingKeyCount--;
                 }
-
-                JsState.WritingKeyCount--;
 
                 writer.Write(JsWriter.MapKeySeperator);
 
@@ -228,8 +253,14 @@ namespace ServiceStack.Text.Common
                 else
                 {
                     JsState.IsWritingValue = true;
-                    writeValueFn(writer, kvp.Value);
-                    JsState.IsWritingValue = false;
+                    try
+                    {
+                        writeValueFn(writer, kvp.Value);
+                    }
+                    finally
+                    {
+                        JsState.IsWritingValue = false;
+                    }
                 }
             }
 

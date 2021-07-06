@@ -12,7 +12,9 @@ namespace ServiceStack.Text.Tests
     [TestFixture]
     public class StructTests
     {
+#if !NETCORE
         [Serializable]
+#endif
         public class Foo
         {
             public string Name { get; set; }
@@ -24,7 +26,9 @@ namespace ServiceStack.Text.Tests
 
         public interface IText { }
 
+#if !NETCORE
         [Serializable]
+#endif
         public struct Text
         {
             private readonly string _value;
@@ -55,7 +59,7 @@ namespace ServiceStack.Text.Tests
             }
         }
 
-        [TestFixtureSetUp]
+        [OneTimeSetUp]
         public void SetUp()
         {
 #if IOS
@@ -67,12 +71,6 @@ namespace ServiceStack.Text.Tests
             JsConfig.RegisterTypeForAot<KeyValuePair<string, string>> ();
             JsConfig.RegisterTypeForAot<Pair> ();
 #endif
-        }
-
-        [TearDown]
-        public void TearDown()
-        {
-            JsConfig.Reset();
         }
 
         [Test]
@@ -120,7 +118,7 @@ namespace ServiceStack.Text.Tests
         [Test]
         public void Test_enum_overloads()
         {
-            JsConfig<Person>.EmitCamelCaseNames = true;
+            JsConfig<Person>.TextCase = TextCase.CamelCase;
             JsConfig.IncludeNullValues = true;
             JsConfig<PersonStatus>.SerializeFn = text => text.ToString().ToCamelCase();
 
@@ -208,14 +206,14 @@ namespace ServiceStack.Text.Tests
 
             Assert.That(dto.ToJsv(),
                 Is.EqualTo("{Id:1,Name:foo}"));
-#if !XBOX && !SL5 && !IOS
             Assert.That(dto.ToXml(),
                 Is.EqualTo("<?xml version=\"1.0\" encoding=\"utf-8\"?><UserStruct xmlns:i=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns=\"http://schemas.datacontract.org/2004/07/ServiceStack.Text.Tests\"><Id>1</Id><Name>foo</Name></UserStruct>"));
-#endif
             JsConfig.Reset();
         }
 
+#if !NETCORE 
         [Serializable]
+#endif
         protected struct DangerousText1
         {
             public static object Parse(string text)
@@ -224,7 +222,9 @@ namespace ServiceStack.Text.Tests
             }
         }
 
+#if !NETCORE
         [Serializable]
+#endif
         protected struct DangerousText2
         {
             public static int Parse(string text)
@@ -257,6 +257,7 @@ namespace ServiceStack.Text.Tests
             Assert.IsNull(ret);
         }
 
+#if !NETCORE
         [Explicit("Ensure this test has proven to work, before adding it to the test suite")]
         [Test]
         [TestCase("en")]
@@ -274,6 +275,7 @@ namespace ServiceStack.Text.Tests
             var r2 = s.DeserializeFromString(interim);
             Assert.AreEqual(r, r2);
         }
+#endif
     }
 
     public struct UserStruct

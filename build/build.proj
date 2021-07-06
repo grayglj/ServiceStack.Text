@@ -1,108 +1,94 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Default"
-    xmlns='http://schemas.microsoft.com/developer/msbuild/2003' ToolsVersion="4.0">
-  <Import Project="$(MSBuildProjectDirectory)/build.tasks" />
+         xmlns='http://schemas.microsoft.com/developer/msbuild/2003' ToolsVersion="4.0">
+    <Import Project="$(MSBuildProjectDirectory)/build.tasks" />
 
-  <PropertyGroup>
-    <MajorVersion Condition="$(MajorVersion) == ''">4</MajorVersion>
-    <MinorVersion Condition="$(MinorVersion) == ''">0</MinorVersion>
-    <PatchVersion Condition="$(PatchVersion) == ''">$(BUILD_NUMBER)</PatchVersion>
-  </PropertyGroup>
+    <PropertyGroup>
+        <MajorVersion Condition="$(MajorVersion) == ''">5</MajorVersion>
+        <MinorVersion Condition="$(MinorVersion) == ''">0</MinorVersion>
+        <PatchVersion Condition="$(PatchVersion) == ''">$(BUILD_NUMBER)</PatchVersion>
+    </PropertyGroup>
 
-  <PropertyGroup>
-    <BuildSolutionDir>$(MSBuildProjectDirectory)/..</BuildSolutionDir>
-    <SrcDir>$(BuildSolutionDir)/src</SrcDir>
-    <Configuration Condition="$(Configuration) == ''">Release</Configuration>
-    <NuGetPath>$(BuildSolutionDir)/src/.nuget/nuget.exe</NuGetPath>
-    <NuGetPackageDir>$(BuildSolutionDir)/NuGet/</NuGetPackageDir>
-    <Version>$(MajorVersion).$(MinorVersion).$(PatchVersion).0</Version>
-    <UnstableTag Condition="$(RELEASE) == ''">-unstable</UnstableTag>
-    <PackageVersion>$(MajorVersion).$(MinorVersion).$(PatchVersion)$(UnstableTag)</PackageVersion>
-    <EnvVersion>$(MajorVersion).$(MinorVersion)$(PatchVersion)</EnvVersion>
-  </PropertyGroup>
+    <PropertyGroup>
+        <BuildSolutionDir>$(MSBuildProjectDirectory)/..</BuildSolutionDir>
+        <SrcDir>$(BuildSolutionDir)/src</SrcDir>
+        <Configuration Condition="$(Configuration) == ''">Release</Configuration>
+        <NuGetPackageDir>$(BuildSolutionDir)/NuGet/</NuGetPackageDir>
+        <PackageVersion>$(MajorVersion).$(MinorVersion).$(PatchVersion)</PackageVersion>
+    </PropertyGroup>
+
+    <PropertyGroup>
+        <DoBuildSolutionsDependsOn>
+            BeforeBuildSolutions;
+            BuildSolutions
+        </DoBuildSolutionsDependsOn>
+    </PropertyGroup>
+
+    <Target Name="BeforeBuildSolutions">
+        <Message Text="*****Before building solution*****" Importance="high"/>
+        <CallTarget Targets="UpdateVersion" />
+    </Target>
+
+    <Target Name="BuildSolutions">
+        <CallTarget Targets="ClearNuGetRestoreCaches" />
+        <MSBuild Projects="$(BuildSolutionDir)/src/ServiceStack.Text.sln" Targets="Restore" />
+
+        <MSBuild Projects="$(BuildSolutionDir)/src/ServiceStack.Text.sln" Targets="Build"
+                 Properties="Configuration=$(Configuration)" />
+
+        <!-- Northwind.Common -->
+        <MSBuild Projects="$(BuildSolutionDir)/tests/Northwind.Common/Northwind.Common.csproj" Targets="Restore" />
+        <MSBuild Projects="$(BuildSolutionDir)/tests/Northwind.Common/Northwind.Common.csproj"
+                 Targets="Build"
+                 Properties="Configuration=$(Configuration)" />
+    </Target>
+
+    <!-- need to remove old caches from nuget restore from .Core csproj's -->
+    <Target Name="ClearNuGetRestoreCaches">
+        <RemoveDir Directories="$(SrcDir)/ServiceStack.Text/obj" />
+    </Target>
+
+    <Target Name="UpdateVersion">
+        <!-- Update Version -->
+        <ItemGroup>
+            <RegexTransform Include="$(SrcDir)/ServiceStack.Text/Env.cs">
+                <Find>ServiceStackVersion = \d+\.\d+m;</Find>
+                <ReplaceWith>ServiceStackVersion = $(MajorVersion).$(MinorVersion)$(PatchVersion)m;</ReplaceWith>
+            </RegexTransform>
+
+            <RegexTransform Include="$(SrcDir)/ServiceStack.Text/Env.cs">
+                <Find>new DateTime.*</Find>
+                <ReplaceWith>new DateTime($([System.DateTime]::Now.ToString(`yyyy,MM,dd`)));</ReplaceWith>
+            </RegexTransform>
+
+            <!--Update Min Dependency Version -->
+            <RegexTransform Include="$(BuildSolutionDir)/src/Directory.Build.props;$(BuildSolutionDir)/tests/Directory.Build.props">
+                <Find>&lt;Version&gt;[^&lt;]*</Find>
+                <ReplaceWith>&lt;Version&gt;$(PackageVersion)</ReplaceWith>
+            </RegexTransform>
+        </ItemGroup>
+
+        <RegexTransform Items="@(RegexTransform)" />
+    </Target>
+
+    <Target Name="Default" DependsOnTargets="$(DoBuildSolutionsDependsOn)">
+
+        <!-- ServiceStack.Memory -->
+        <MSBuild Projects="$(BuildSolutionDir)/src/ServiceStack.Memory/ServiceStack.Memory.csproj"
+                 Targets="Build;Pack"
+                 Properties="Configuration=$(Configuration)" />
+
+        <!-- ServiceStack.Text -->
+        <MSBuild Projects="$(BuildSolutionDir)/src/ServiceStack.Text/ServiceStack.Text.csproj"
+                 Targets="Build;Pack"
+                 Properties="Configuration=$(Configuration)" />
 
 
-  <ItemGroup>
-      <NugetPackageFilesToDelete Include="$(NuGetPackageDir)/*.nupkg"/>
-  </ItemGroup>
+        <!-- Copy all *.nupkg to /NuGet -->
+        <ItemGroup>
+            <NugetPackagesToMove Include="$(BuildSolutionDir)/src/**/bin/$(Configuration)/*.nupkg"/>
+        </ItemGroup>
+        <Move SourceFiles="@(NugetPackagesToMove)" DestinationFolder="$(NuGetPackageDir)" />
 
-
-  <PropertyGroup>
-    <DoBuildSolutionsDependsOn>
-      BeforeBuildSolutions;
-      BuildSolutions
-    </DoBuildSolutionsDependsOn>
-  </PropertyGroup>
-
-  <Target Name="Default" DependsOnTargets="$(DoBuildSolutionsDependsOn)" />
-
-  <Target Name="TeamCityBuild">
-    <!--<Copy SourceFiles="$(BuildSolutionDir)/tests/ServiceStack.Common.Tests/ci.app.config" DestinationFiles="$(BuildSolutionDir)/tests/ServiceStack.Common.Tests/app.config" />-->
-    <CallTarget Targets="Default" />
-  </Target>
-
-  <Target Name="BeforeBuildSolutions">
-    <Message Text="*****Before building solution*****" Importance="high"/>
-    <!--<Copy SourceFiles="Test/ci.app.config" DestinationFiles="Test/app.config" />-->
-  </Target>
-
-  <Target Name="UnitTests" DependsOnTargets="$(DoBuildSolutionsDependsOn)">
-      <Exec Command="$(BuildSolutionDir)/lib/tests/nunit-console/nunit-console-x86.exe $(BuildSolutionDir)/tests/ServiceStack.Text.Tests/bin/$(Configuration)/ServiceStack.Text.Tests.dll"/>
-      <Exec Command="$(BuildSolutionDir)/lib/tests/nunit-console/nunit-console-x86.exe /framework=4.0 $(BuildSolutionDir)/tests/ServiceStack.Text.Net40.Tests/bin/$(Configuration)/ServiceStack.Text.Tests.dll"/>
-  </Target>
-
-  <Target Name="BuildSolutions">
-    <MSBuild Projects="$(BuildSolutionDir)/src/ServiceStack.Text.sln" Targets="Build"
-      Properties="Configuration=$(Configuration)" />
-  </Target>
-
-  <Target Name="UpdateVersion">
-    <!-- Update Version -->
-    <ItemGroup>
-      <RegexTransform Include="$(SrcDir)/**/AssemblyInfo.cs">
-        <Find>\d+\.\d+\.\d+\.\d+</Find>
-        <ReplaceWith>$(Version)</ReplaceWith>
-      </RegexTransform>
-      <RegexTransform Include="$(SrcDir)/ServiceStack.Text/Env.cs">
-        <Find>ServiceStackVersion = \d+\.\d+m;</Find>
-        <ReplaceWith>ServiceStackVersion = $(EnvVersion)m;</ReplaceWith>
-      </RegexTransform>
-      <RegexTransform Include="$(SrcDir)/ServiceStack.Text/Env.cs">
-        <Find>DateTime\.Parse.*</Find>
-        <ReplaceWith>DateTime.Parse("$([System.DateTime]::Now.ToString(`yyyy-MM-dd`))");</ReplaceWith>
-      </RegexTransform>
-      <RegexTransform Include="$(BuildSolutionDir)/tests/**/*.config">
-        <Find>key="servicestack:license".*</Find>
-        <ReplaceWith>key="servicestack:license" value="$([System.IO.File]::ReadAllText($(MSBuildProjectDirectory)/appsettings.license.txt))" /&gt;</ReplaceWith>
-      </RegexTransform>
-      <!--Update Min Dependency Version -->
-      <RegexTransform Include="$(NuGetPackageDir)/**/*.nuspec">
-        <Find>version="4\.0[^"]*"</Find>
-        <ReplaceWith>version="$(PackageVersion)"</ReplaceWith>
-      </RegexTransform>
-    </ItemGroup>
-
-    <RegexTransform Items="@(RegexTransform)" />
-  </Target>
-
-  <Target Name="NuGetPack">
-    <CallTarget Targets="UpdateVersion" />
-
-    <Delete Files="@(NugetPackageFilesToDelete)" />
-
-    <ItemGroup>
-      <TextFiles Include="$(SrcDir)/ServiceStack.Text/bin/$(Configuration)/ServiceStack.Text.*"></TextFiles>
-    </ItemGroup>
-
-    <MSBuild Projects="$(BuildSolutionDir)/src/ServiceStack.Text/ServiceStack.Text.csproj"
-             Targets="Build"
-             Properties="Version=$(PackageVersion);Configuration=$(Configuration)" />
-
-    <MakeDir Directories="$(NuGetPackageDir)/ServiceStack.Text/lib/net40" Condition="!Exists('$(NuGetPackageDir)/ServiceStack.Text/lib/net40')" />
-    <Copy SourceFiles="%(TextFiles.Identity)" DestinationFolder="$(NuGetPackageDir)/ServiceStack.Text/lib/net40" />
- 
-    <Exec Command="&quot;$(NuGetPath)&quot; pack &quot;$(NuGetPackageDir)/ServiceStack.Text/servicestack.text.nuspec&quot; -OutputDirectory &quot;$(NuGetPackageDir)&quot; -Version $(PackageVersion) -Symbols"
-            LogStandardErrorAsError="true" />
-
-  </Target>
+    </Target>
 </Project>

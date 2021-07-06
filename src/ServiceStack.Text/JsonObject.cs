@@ -1,78 +1,91 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
-using System.Text.RegularExpressions;
 using ServiceStack.Text.Common;
 using ServiceStack.Text.Json;
 
 namespace ServiceStack.Text
 {
-	public static class JsonExtensions
-	{
-		public static T JsonTo<T>(this Dictionary<string, string> map, string key)
-		{
-			return Get<T>(map, key);
-		}
+    public static class JsonExtensions
+    {
+        public static T JsonTo<T>(this Dictionary<string, string> map, string key)
+        {
+            return Get<T>(map, key);
+        }
 
         /// <summary>
         /// Get JSON string value converted to T
         /// </summary>
-        public static T Get<T>(this Dictionary<string, string> map, string key)
-		{
-			string strVal;
-			return map.TryGetValue(key, out strVal) ? JsonSerializer.DeserializeFromString<T>(strVal) : default(T);
-		}
+        public static T Get<T>(this Dictionary<string, string> map, string key, T defaultValue = default)
+        {
+            if (map == null)
+                return default;
+            return map.TryGetValue(key, out var strVal) ? JsonSerializer.DeserializeFromString<T>(strVal) : defaultValue;
+        }
+
+        public static T[] GetArray<T>(this Dictionary<string, string> map, string key)
+        {
+            if (map == null)
+                return TypeConstants<T>.EmptyArray;
+            return map.TryGetValue(key, out var value) 
+                ? (map is JsonObject obj ? value.FromJson<T[]>() : value.FromJsv<T[]>()) 
+                : TypeConstants<T>.EmptyArray;
+        }
 
         /// <summary>
         /// Get JSON string value
         /// </summary>
         public static string Get(this Dictionary<string, string> map, string key)
-		{
-			string strVal;
-            return map.TryGetValue(key, out strVal) ? JsonTypeSerializer.Instance.UnescapeString(strVal) : null;
-		}
+        {
+            if (map == null)
+                return null;
+            return map.TryGetValue(key, out var strVal) 
+                ? JsonTypeSerializer.Instance.UnescapeString(strVal) 
+                : null;
+        }
 
-		public static JsonArrayObjects ArrayObjects(this string json)
-		{
-			return Text.JsonArrayObjects.Parse(json);
-		}
+        public static JsonArrayObjects ArrayObjects(this string json)
+        {
+            return Text.JsonArrayObjects.Parse(json);
+        }
 
-		public static List<T> ConvertAll<T>(this JsonArrayObjects jsonArrayObjects, Func<JsonObject, T> converter)
-		{
-			var results = new List<T>();
+        public static List<T> ConvertAll<T>(this JsonArrayObjects jsonArrayObjects, Func<JsonObject, T> converter)
+        {
+            var results = new List<T>();
 
-			foreach (var jsonObject in jsonArrayObjects)
-			{
-				results.Add(converter(jsonObject));
-			}
+            foreach (var jsonObject in jsonArrayObjects)
+            {
+                results.Add(converter(jsonObject));
+            }
 
-			return results;
-		}
+            return results;
+        }
 
-		public static T ConvertTo<T>(this JsonObject jsonObject, Func<JsonObject, T> converFn)
-		{
-			return jsonObject == null 
-				? default(T) 
-				: converFn(jsonObject);
-		}
+        public static T ConvertTo<T>(this JsonObject jsonObject, Func<JsonObject, T> convertFn)
+        {
+            return jsonObject == null
+                ? default
+                : convertFn(jsonObject);
+        }
 
-		public static Dictionary<string, string> ToDictionary(this JsonObject jsonObject)
-		{
-			return jsonObject == null 
-				? new Dictionary<string, string>() 
-				: new Dictionary<string, string>(jsonObject);
-		}
-	}
+        public static Dictionary<string, string> ToDictionary(this JsonObject jsonObject)
+        {
+            return jsonObject == null
+                ? new Dictionary<string, string>()
+                : new Dictionary<string, string>(jsonObject);
+        }
+    }
 
-	public class JsonObject : Dictionary<string, string>
-	{
+    public class JsonObject : Dictionary<string, string>
+    {
         /// <summary>
         /// Get JSON string value
         /// </summary>
         public new string this[string key]
         {
-            get { return this.Get(key); }
-            set { base[key] = value; }
+            get => this.Get(key);
+            set => base[key] = value;
         }
 
         public static JsonObject Parse(string json)
@@ -85,21 +98,19 @@ namespace ServiceStack.Text
             return JsonArrayObjects.Parse(json);
         }
 
-		public JsonArrayObjects ArrayObjects(string propertyName)
-		{
-			string strValue;
-			return this.TryGetValue(propertyName, out strValue)
-				? JsonArrayObjects.Parse(strValue)
-				: null;
-		}
+        public JsonArrayObjects ArrayObjects(string propertyName)
+        {
+            return this.TryGetValue(propertyName, out var strValue)
+                ? JsonArrayObjects.Parse(strValue)
+                : null;
+        }
 
-		public JsonObject Object(string propertyName)
-		{
-			string strValue;
-			return this.TryGetValue(propertyName, out strValue)
-				? Parse(strValue)
-				: null;
-		}
+        public JsonObject Object(string propertyName)
+        {
+            return this.TryGetValue(propertyName, out var strValue)
+                ? Parse(strValue)
+                : null;
+        }
 
         /// <summary>
         /// Get unescaped string value
@@ -116,8 +127,6 @@ namespace ServiceStack.Text
         {
             return base[key];
         }
-        
-        static readonly Regex NumberRegEx = new Regex(@"^[0-9]*(?:\.[0-9]*)?$", PclExport.Instance.RegexOptions);
 
         /// <summary>
         /// Write JSON Array, Object, bool or number values as raw string
@@ -130,10 +139,10 @@ namespace ServiceStack.Text
                 var firstChar = strValue[0];
                 var lastChar = strValue[strValue.Length - 1];
                 if ((firstChar == JsWriter.MapStartChar && lastChar == JsWriter.MapEndChar)
-                    || (firstChar == JsWriter.ListStartChar && lastChar == JsWriter.ListEndChar) 
+                    || (firstChar == JsWriter.ListStartChar && lastChar == JsWriter.ListEndChar)
                     || JsonUtils.True == strValue
                     || JsonUtils.False == strValue
-                    || NumberRegEx.IsMatch(strValue))
+                    || IsJavaScriptNumber(strValue))
                 {
                     writer.Write(strValue);
                     return;
@@ -141,15 +150,59 @@ namespace ServiceStack.Text
             }
             JsonUtils.WriteString(writer, strValue);
         }
+
+        private static bool IsJavaScriptNumber(string strValue)
+        {
+            var firstChar = strValue[0];
+            if (firstChar == '0')
+            {
+                if (strValue.Length == 1)
+                    return true;
+                if (!strValue.Contains("."))
+                    return false;
+            }
+
+            if (!strValue.Contains("."))
+            {
+                if (long.TryParse(strValue, out var longValue))
+                {
+                    return longValue < JsonUtils.MaxInteger && longValue > JsonUtils.MinInteger;
+                }
+                return false;
+            }
+
+            if (double.TryParse(strValue, NumberStyles.Float | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out var doubleValue))
+            {
+                return doubleValue < JsonUtils.MaxInteger && doubleValue > JsonUtils.MinInteger;
+            }
+            return false;
+        }
+
+        public T ConvertTo<T>()
+        {
+            return (T)this.ConvertTo(typeof(T));
+        }
+
+        public object ConvertTo(Type type)
+        {
+            var map = new Dictionary<string, object>();
+
+            foreach (var entry in this)
+            {
+                map[entry.Key] = entry.Value;
+            }
+
+            return map.FromObjectDictionary(type);
+        }
     }
 
-	public class JsonArrayObjects : List<JsonObject>
-	{
-		public static JsonArrayObjects Parse(string json)
-		{
-			return JsonSerializer.DeserializeFromString<JsonArrayObjects>(json);
-		}
-	}
+    public class JsonArrayObjects : List<JsonObject>
+    {
+        public static JsonArrayObjects Parse(string json)
+        {
+            return JsonSerializer.DeserializeFromString<JsonArrayObjects>(json);
+        }
+    }
 
     public interface IValueWriter
     {
@@ -165,20 +218,10 @@ namespace ServiceStack.Text
             this.json = json;
         }
 
-        public T As<T>()
-        {
-            return JsonSerializer.DeserializeFromString<T>(json);
-        }
-        
-        public override string ToString()
-        {
-            return json;
-        }
+        public T As<T>() => JsonSerializer.DeserializeFromString<T>(json);
 
-        public void WriteTo(ITypeSerializer serializer, TextWriter writer)
-        {
-            writer.Write(json ?? JsonUtils.Null);
-        }
+        public override string ToString() => json;
+
+        public void WriteTo(ITypeSerializer serializer, TextWriter writer) => writer.Write(json ?? JsonUtils.Null);
     }
-
 }

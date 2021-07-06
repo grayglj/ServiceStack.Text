@@ -1,8 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Collections.Specialized;
-using System.Diagnostics;
 using System.Globalization;
+using System.Text.RegularExpressions;
+using System.Threading;
 using NUnit.Framework;
 using ServiceStack.Text.Tests.DynamicModels.DataModel;
 
@@ -12,7 +13,7 @@ namespace ServiceStack.Text.Tests
     public class DictionaryTests
         : TestBase
     {
-        [TestFixtureSetUp]
+        [OneTimeSetUp]
         public void SetUp()
         {
 #if IOS
@@ -42,9 +43,9 @@ namespace ServiceStack.Text.Tests
         public void Can_serialize_one_level_dictionary()
         {
             var map = new Dictionary<string, int>
-          	{
-				{"One", 1}, {"Two", 2}, {"Three", 3}, 
-          	};
+              {
+                {"One", 1}, {"Two", 2}, {"Three", 3},
+              };
 
             Serialize(map);
         }
@@ -69,18 +70,18 @@ namespace ServiceStack.Text.Tests
         public void Can_serialize_two_level_dictionary()
         {
             var map = new Dictionary<string, Dictionary<string, int>>
-          		{
-					{"map1", new Dictionary<string, int>
-			         	{
-							{"One", 1}, {"Two", 2}, {"Three", 3}, 
-			         	}
-					},
-					{"map2", new Dictionary<string, int>
-			         	{
-							{"Four", 4}, {"Five", 5}, {"Six", 6}, 
-			         	}
-					},
-          		};
+                  {
+                    {"map1", new Dictionary<string, int>
+                         {
+                            {"One", 1}, {"Two", 2}, {"Three", 3},
+                         }
+                    },
+                    {"map2", new Dictionary<string, int>
+                         {
+                            {"Four", 4}, {"Five", 5}, {"Six", 6},
+                         }
+                    },
+                  };
 
             Serialize(map);
         }
@@ -89,18 +90,18 @@ namespace ServiceStack.Text.Tests
         public void Can_serialize_two_level_dictionary_with_int_key()
         {
             var map = new Dictionary<int, Dictionary<string, int>>
-          		{
-					{1, new Dictionary<string, int>
-			         	{
-							{"One", 1}, {"Two", 2}, {"Three", 3}, 
-			         	}
-					},
-					{2, new Dictionary<string, int>
-			         	{
-							{"Four", 4}, {"Five", 5}, {"Six", 6}, 
-			         	}
-					},
-          		};
+                  {
+                    {1, new Dictionary<string, int>
+                         {
+                            {"One", 1}, {"Two", 2}, {"Three", 3},
+                         }
+                    },
+                    {2, new Dictionary<string, int>
+                         {
+                            {"Four", 4}, {"Five", 5}, {"Six", 6},
+                         }
+                    },
+                  };
 
             Serialize(map);
         }
@@ -111,15 +112,15 @@ namespace ServiceStack.Text.Tests
             JsConfig.TryToParsePrimitiveTypeValues = true;
             JsConfig.ConvertObjectTypesIntoStringDictionary = true;
             var original = new Dictionary<string, StrictType[]>
-          		{
-					{"array", 
-                        new [] { 
-                            new StrictType { Name = "First" }, 
-                            new StrictType { Name = "Second" }, 
-                            new StrictType { Name = "Third" }, 
+                  {
+                    {"array",
+                        new [] {
+                            new StrictType { Name = "First" },
+                            new StrictType { Name = "Second" },
+                            new StrictType { Name = "Third" },
                         }
-					},
-          		};
+                    },
+                  };
             var json = JsonSerializer.SerializeToString(original);
             var deserialized = JsonSerializer.DeserializeFromString<Dictionary<string, object>>(json);
 
@@ -140,19 +141,19 @@ namespace ServiceStack.Text.Tests
             JsConfig.ConvertObjectTypesIntoStringDictionary = true;
 
             var original = new Dictionary<string, string>
-          		{
-					{"embeddedtypecharacters", "{{body}}"},
-					{"embeddedlistcharacters", "[stuff]"},
-					{"ShortDateTimeFormat", "yyyy-MM-dd"},
-					{"DefaultDateTimeFormat", "dd/MM/yyyy HH:mm:ss"},
-					{"DefaultDateTimeFormatWithFraction", "dd/MM/yyyy HH:mm:ss.fff"},
-					{"XsdDateTimeFormat", "yyyy-MM-ddTHH:mm:ss.fffffffZ"},
-					{"XsdDateTimeFormat3F", "yyyy-MM-ddTHH:mm:ss.fffZ"},
-					{"XsdDateTimeFormatSeconds", "yyyy-MM-ddTHH:mm:ssZ"},
-					{"ShouldBeAZeroInAString", "0"},
-					{"ShouldBeAPositiveIntegerInAString", "12345"},
-					{"ShouldBeANegativeIntegerInAString", "-12345"},
-          		};
+                  {
+                    {"embeddedtypecharacters", "{{body}}"},
+                    {"embeddedlistcharacters", "[stuff]"},
+                    {"ShortDateTimeFormat", "yyyy-MM-dd"},
+                    {"DefaultDateTimeFormat", "dd/MM/yyyy HH:mm:ss"},
+                    {"DefaultDateTimeFormatWithFraction", "dd/MM/yyyy HH:mm:ss.fff"},
+                    {"XsdDateTimeFormat", "yyyy-MM-ddTHH:mm:ss.fffffffZ"},
+                    {"XsdDateTimeFormat3F", "yyyy-MM-ddTHH:mm:ss.fffZ"},
+                    {"XsdDateTimeFormatSeconds", "yyyy-MM-ddTHH:mm:ssZ"},
+                    {"ShouldBeAZeroInAString", "0"},
+                    {"ShouldBeAPositiveIntegerInAString", "12345"},
+                    {"ShouldBeANegativeIntegerInAString", "-12345"},
+                  };
             var json = JsonSerializer.SerializeToString(original);
             var deserialized = JsonSerializer.DeserializeFromString<Dictionary<string, object>>(json);
 
@@ -182,8 +183,8 @@ namespace ServiceStack.Text.Tests
                 { "b", 32 },
                 { "c", false },
                 { "d", new[] {1, 2, 3} },
-				{ "e", 1m },
-				{ "f", 1.1m },
+                { "e", 1m },
+                { "f", 1.1m },
             };
         }
 
@@ -263,7 +264,7 @@ namespace ServiceStack.Text.Tests
         class NumericType
         {
             public NumericType(decimal max, Type type)
-                : this(0, max, type) {}
+                : this(0, max, type) { }
 
             public NumericType(decimal min, decimal max, Type type)
             {
@@ -313,7 +314,7 @@ namespace ServiceStack.Text.Tests
             Assert.AreEqual(toDoubleValue, doubleValue, Math.Pow(2, 1000));
 
             var json = "{{\"float\":{0},\"double\":{1},\"int\":{2},\"long\":{3}}}"
-                .Fmt(floatValue, doubleValue, intValue, longValue);
+                .Fmt(CultureInfo.InvariantCulture, floatValue, doubleValue, intValue, longValue);
             var map = JsonSerializer.DeserializeFromString<IDictionary<string, object>>(json);
 
             Assert.That(map["float"], Is.TypeOf<float>());
@@ -335,11 +336,11 @@ namespace ServiceStack.Text.Tests
         public void deserizes_signed_types_into_to_best_fit_numeric()
         {
             var unsignedTypes = new[]
-				{
-					new NumericType(Int16.MinValue,Int16.MaxValue, typeof (Int16)),
-					new NumericType(Int32.MinValue,Int32.MaxValue, typeof (Int32)),
-					new NumericType(Int64.MinValue,Int64.MaxValue, typeof (Int64)),
-				};
+                {
+                    new NumericType(Int16.MinValue,Int16.MaxValue, typeof (Int16)),
+                    new NumericType(Int32.MinValue,Int32.MaxValue, typeof (Int32)),
+                    new NumericType(Int64.MinValue,Int64.MaxValue, typeof (Int64)),
+                };
 
             JsConfig.TryToParsePrimitiveTypeValues = true;
             JsConfig.TryToParseNumericType = true;
@@ -348,10 +349,10 @@ namespace ServiceStack.Text.Tests
             foreach (var signedType in unsignedTypes)
             {
                 var dict = new Dictionary<string, object>
-				{
-					{"min",signedType.Min},
-					{"max",signedType.Max},
-				};
+                {
+                    {"min",signedType.Min},
+                    {"max",signedType.Max},
+                };
 
                 var json = JsonSerializer.SerializeToString(dict);
                 var deserializedDict = JsonSerializer.DeserializeFromString<IDictionary<string, object>>(json);
@@ -367,24 +368,22 @@ namespace ServiceStack.Text.Tests
         public void deserizes_unsigned_types_into_to_best_fit_numeric()
         {
             var unsignedTypes = new[]
-				{
-					new NumericType(byte.MinValue,byte.MaxValue, typeof (byte)),
-					new NumericType(UInt16.MaxValue, typeof (UInt16)),
-					new NumericType(UInt32.MaxValue, typeof (UInt32)),
-					new NumericType(UInt64.MaxValue, typeof (UInt64)),
-				};
+                {
+                    new NumericType(byte.MinValue,byte.MaxValue, typeof (byte)),
+                    new NumericType(UInt16.MaxValue, typeof (UInt16)),
+                    new NumericType(UInt32.MaxValue, typeof (UInt32)),
+                    new NumericType(UInt64.MaxValue, typeof (UInt64)),
+                };
 
-            JsConfig.TryToParsePrimitiveTypeValues = true;
-            JsConfig.TryToParseNumericType = true;
-
+            JsConfig.TryToParsePrimitiveTypeValues = JsConfig.TryToParseNumericType = JsConfig.TryParseIntoBestFit = true;
 
             foreach (var unsignedType in unsignedTypes)
             {
                 var dict = new Dictionary<string, object>
-				{
-					{"min",unsignedType.Min},
-					{"max",unsignedType.Max},
-				};
+                {
+                    {"min",unsignedType.Min},
+                    {"max",unsignedType.Max},
+                };
 
                 var json = JsonSerializer.SerializeToString(dict);
                 var deserializedDict = JsonSerializer.DeserializeFromString<IDictionary<string, object>>(json);
@@ -392,8 +391,9 @@ namespace ServiceStack.Text.Tests
                 Assert.That(deserializedDict["min"], Is.TypeOf<byte>());
                 Assert.That(deserializedDict["max"], Is.TypeOf(unsignedType.Type));
                 Assert.That(deserializedDict["max"], Is.EqualTo(unsignedType.Max));
-
             }
+
+            JsConfig.Reset();
         }
 
         [Test]
@@ -414,7 +414,8 @@ namespace ServiceStack.Text.Tests
         [Test]
         public void Can_serialise_null_values_from_dictionary_correctly()
         {
-            JsConfig.IncludeNullValues = true;
+            JsConfig.IncludeNullValues = false;
+            JsConfig.IncludeNullValuesInDictionaries = true;
             var dictionary = new Dictionary<string, object> { { "value", null } };
 
             Serialize(dictionary, includeXml: false);
@@ -429,7 +430,8 @@ namespace ServiceStack.Text.Tests
         [Test]
         public void Will_ignore_null_values_from_dictionary_correctly()
         {
-            JsConfig.IncludeNullValues = false;
+            JsConfig.IncludeNullValues = true;
+            JsConfig.IncludeNullValuesInDictionaries = false;
             var dictionary = new Dictionary<string, string> { { "value", null } };
 
             Serialize(dictionary, includeXml: false);
@@ -527,7 +529,7 @@ namespace ServiceStack.Text.Tests
         public void Can_Deserialize_Object_To_Dictionary()
         {
             const string json = "{\"Id\":1}";
-            var d = json.To<Dictionary<string, string>>();
+            var d = json.ConvertTo<Dictionary<string, string>>();
             Assert.That(d.ContainsKey("Id"));
             Assert.That(d["Id"], Is.EqualTo("1"));
         }
@@ -556,11 +558,11 @@ namespace ServiceStack.Text.Tests
         public void Can_deserialize_ordereddictionary()
         {
             var original = new OrderedDictionary {
-				{"Key1", "Value1"},
+                {"Key1", "Value1"},
                 {"Key2", 2},
                 {3, "Value3"},
                 {"Key4", false}
-          	};
+              };
             var json = JsonSerializer.SerializeToString(original);
             var deserialized = JsonSerializer.DeserializeFromString<OrderedDictionary>(json);
 
@@ -577,11 +579,11 @@ namespace ServiceStack.Text.Tests
         public void Can_deserialize_ordereddictionary_subclass()
         {
             var original = new OrderedDictionarySub {
-				{"Key1", "Value1"},
-				{"Key2", 2},
-				{3, "Value3"},
-				{"Key4", false}
-          	};
+                {"Key1", "Value1"},
+                {"Key2", 2},
+                {3, "Value3"},
+                {"Key4", false}
+              };
             var json = JsonSerializer.SerializeToString(original);
             var deserialized = JsonSerializer.DeserializeFromString<OrderedDictionarySub>(json);
 
@@ -592,6 +594,68 @@ namespace ServiceStack.Text.Tests
             Assert.That(deserialized["Key2"], Is.EqualTo(2));
             Assert.That(deserialized[2], Is.EqualTo("Value3"));
             Assert.That(deserialized["Key4"], Is.EqualTo(false));
+        }
+
+        [Test]
+        public void Can_recover_from_exceptions_when_serializing_dictionary_keys()
+        {
+            var before = JsConfig<int>.SerializeFn;
+            try
+            {
+                JsConfig<int>.SerializeFn = v =>
+                {
+                    throw new Exception("Boom!");
+                };
+                var target = new Dictionary<int, string>
+                {
+                    { 1, "1" },
+                };
+                Assert.Throws<Exception>(() => JsonSerializer.SerializeToString(target));
+            }
+            finally
+            {
+                JsConfig<int>.SerializeFn = before;
+            }
+            var json = JsonSerializer.SerializeToString(new ModelWithDictionary());
+
+            json.Print();
+
+            Assert.That(json.StartsWith("{"));
+        }
+
+        private class ModelWithDictionary
+        {
+            public Dictionary<string, string> Value { get; set; }
+        }
+
+        [Test]
+        public void Do_not_convert_Guids()
+        {
+            JsConfig.DateHandler = DateHandler.ISO8601;
+            JsConfig.AlwaysUseUtc = true;
+            JsConfig.TryToParsePrimitiveTypeValues = true;  // needed for datetime
+
+            var isGuidRegex =
+              new Regex(@"^(\{){0,1}[0-9a-fA-F]{8}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{4}\-[0-9a-fA-F]{12}(\}){0,1}$", RegexOptions.Compiled);
+
+            JsConfig.ParsePrimitiveFn = s => isGuidRegex.IsMatch(s) ? s : null;
+
+            var original = new Dictionary<string, object>
+               {
+                   {"GuidString", "6A3F0923-A4B8-4026-9982-5C79128EA128"},
+                   {"DateTime", DateTime.UtcNow}
+               };
+
+            var json = JsonSerializer.SerializeToString(original);
+
+            json.Print();
+
+            var deserialized = JsonSerializer.DeserializeFromString<Dictionary<string, object>>(json);
+
+            Assert.That(deserialized["GuidString"], Is.EqualTo("6A3F0923-A4B8-4026-9982-5C79128EA128"));
+            Assert.That(deserialized["DateTime"], Is.AssignableTo(typeof(DateTime)));
+
+            JsConfig.Reset();
         }
     }
 

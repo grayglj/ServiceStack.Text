@@ -8,7 +8,6 @@ namespace ServiceStack.Text.Tests
     [TestFixture]
     public class ExpandoTests : TestBase
     {
-
         [Test]
         public void Can_serialize_one_level_expando()
         {
@@ -103,7 +102,7 @@ namespace ServiceStack.Text.Tests
         [Test]
         public void Can_serialise_null_values_from_expando_correctly()
         {
-            JsConfig.IncludeNullValues = true;
+            JsConfig.IncludeNullValuesInDictionaries = true;
             dynamic expando = new ExpandoObject();
             expando.value = null;
 
@@ -177,7 +176,7 @@ namespace ServiceStack.Text.Tests
         {
             JsConfig.TryToParsePrimitiveTypeValues = true;
             const string json = "{\"Id\":1}";
-            dynamic d = json.To<ExpandoObject>();
+            dynamic d = json.ConvertTo<ExpandoObject>();
             Assert.That(d.Id, Is.Not.Null);
             Assert.That(d.Id, Is.EqualTo(1));
         }

@@ -13,44 +13,44 @@ namespace ServiceStack.Text.Tests.JsonTests
         [Test]
         public void Prefer_interfaces_should_work_on_top_level_object_using_extension_method()
         {
-            using (JsConfig.With(preferInterfaces:true))
+            using (JsConfig.With(new Config { PreferInterfaces = true }))
             {
                 var json = new Concrete("boo", 1).ToJson();
 
-                Assert.That(json, Is.StringContaining("\"ServiceStack.Text.Tests.JsonTests.IContract, ServiceStack.Text.Tests\""));
+                Assert.That(json, Does.Contain("\"ServiceStack.Text.Tests.JsonTests.IContract, ServiceStack.Text.Tests\""));
             }
         }
 
         [Test]
         public void Should_be_able_to_serialise_based_on_an_interface()
         {
-            using (JsConfig.With(preferInterfaces: true))
+            using (JsConfig.With(new Config { PreferInterfaces = true }))
             {
                 IContract myConcrete = new Concrete("boo", 1);
                 var json = JsonSerializer.SerializeToString(myConcrete, typeof(IContract));
 
                 Console.WriteLine(json);
-                Assert.That(json, Is.StringContaining("\"ServiceStack.Text.Tests.JsonTests.IContract, ServiceStack.Text.Tests\""));
+                Assert.That(json, Does.Contain("\"ServiceStack.Text.Tests.JsonTests.IContract, ServiceStack.Text.Tests\""));
             }
         }
 
         [Test]
         public void Should_not_use_interface_type_if_concrete_specified()
         {
-            using (JsConfig.With(preferInterfaces: false))
+            using (JsConfig.With(new Config { PreferInterfaces = false }))
             {
                 IContract myConcrete = new Concrete("boo", 1);
                 var json = JsonSerializer.SerializeToString(myConcrete, typeof(IContract));
 
                 Console.WriteLine(json);
-                Assert.That(json, Is.StringContaining("\"ServiceStack.Text.Tests.JsonTests.Concrete, ServiceStack.Text.Tests\""));
+                Assert.That(json, Does.Contain("\"ServiceStack.Text.Tests.JsonTests.Concrete, ServiceStack.Text.Tests\""));
             }
         }
 
         [Test]
         public void Should_be_able_to_deserialise_based_on_an_interface_with_no_concrete()
         {
-            using (JsConfig.With(preferInterfaces: true))
+            using (JsConfig.With(new Config { PreferInterfaces = true }))
             {
                 var json = new Concrete("boo", 42).ToJson();
 

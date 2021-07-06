@@ -1,6 +1,7 @@
 ﻿using System;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using NUnit.Framework;
 
 namespace ServiceStack.Text.Tests
@@ -17,11 +18,41 @@ namespace ServiceStack.Text.Tests
         }
 
         [Test]
+        public void Can_LeftPart_and_LeftPart_char_needle()
+        {
+            var str = "user:pass@w:rd";
+            Assert.That(str.LeftPart(':'), Is.EqualTo("user"));
+            Assert.That(str.SplitOnFirst(':')[0], Is.EqualTo("user"));
+            Assert.That(str.RightPart(':'), Is.EqualTo("pass@w:rd"));
+            Assert.That(str.SplitOnFirst(':').Last(), Is.EqualTo("pass@w:rd"));
+
+            Assert.That(str.LeftPart('|'), Is.EqualTo("user:pass@w:rd"));
+            Assert.That(str.SplitOnFirst('|')[0], Is.EqualTo("user:pass@w:rd"));
+            Assert.That(str.RightPart('|'), Is.EqualTo("user:pass@w:rd"));
+            Assert.That(str.SplitOnFirst('|').Last(), Is.EqualTo("user:pass@w:rd"));
+        }
+
+        [Test]
         public void Can_SplitOnFirst_string_needle()
         {
             var parts = "user:pass@w:rd".SplitOnFirst(":");
             Assert.That(parts[0], Is.EqualTo("user"));
             Assert.That(parts[1], Is.EqualTo("pass@w:rd"));
+        }
+
+        [Test]
+        public void Can_LeftPart_and_RightPart_string_needle()
+        {
+            var str = "user::pass@w:rd";
+            Assert.That(str.LeftPart("::"), Is.EqualTo("user"));
+            Assert.That(str.SplitOnFirst("::")[0], Is.EqualTo("user"));
+            Assert.That(str.RightPart("::"), Is.EqualTo("pass@w:rd"));
+            Assert.That(str.SplitOnFirst("::").Last(), Is.EqualTo("pass@w:rd"));
+
+            Assert.That(str.LeftPart("||"), Is.EqualTo("user::pass@w:rd"));
+            Assert.That(str.SplitOnFirst("||")[0], Is.EqualTo("user::pass@w:rd"));
+            Assert.That(str.RightPart("||"), Is.EqualTo("user::pass@w:rd"));
+            Assert.That(str.SplitOnFirst("||").Last(), Is.EqualTo("user::pass@w:rd"));
         }
 
         [Test]
@@ -33,6 +64,21 @@ namespace ServiceStack.Text.Tests
         }
 
         [Test]
+        public void Can_LastLeftPart_and_LastRightPart_char_needle()
+        {
+            var str = "user:name:pass@word";
+            Assert.That(str.LastLeftPart(':'), Is.EqualTo("user:name"));
+            Assert.That(str.SplitOnLast(':')[0], Is.EqualTo("user:name"));
+            Assert.That(str.LastRightPart(':'), Is.EqualTo("pass@word"));
+            Assert.That(str.SplitOnLast(':').Last(), Is.EqualTo("pass@word"));
+
+            Assert.That(str.LastLeftPart('|'), Is.EqualTo("user:name:pass@word"));
+            Assert.That(str.SplitOnLast('|')[0], Is.EqualTo("user:name:pass@word"));
+            Assert.That(str.LastRightPart('|'), Is.EqualTo("user:name:pass@word"));
+            Assert.That(str.SplitOnLast('|').Last(), Is.EqualTo("user:name:pass@word"));
+        }
+
+        [Test]
         public void Can_SplitOnLast_string_needle()
         {
             var parts = "user:name:pass@word".SplitOnLast(":");
@@ -40,8 +86,23 @@ namespace ServiceStack.Text.Tests
             Assert.That(parts[1], Is.EqualTo("pass@word"));
         }
 
+        [Test]
+        public void Can_LastLeftPart_and_LastRightPart_string_needle()
+        {
+            var str = "user::name::pass@word";
+            Assert.That(str.LastLeftPart("::"), Is.EqualTo("user::name"));
+            Assert.That(str.SplitOnLast("::")[0], Is.EqualTo("user::name"));
+            Assert.That(str.LastRightPart("::"), Is.EqualTo("pass@word"));
+            Assert.That(str.SplitOnLast("::").Last(), Is.EqualTo("pass@word"));
+
+            Assert.That(str.LastLeftPart("||"), Is.EqualTo("user::name::pass@word"));
+            Assert.That(str.SplitOnLast("||")[0], Is.EqualTo("user::name::pass@word"));
+            Assert.That(str.LastRightPart("||"), Is.EqualTo("user::name::pass@word"));
+            Assert.That(str.SplitOnLast("||").Last(), Is.EqualTo("user::name::pass@word"));
+        }
+
         private static readonly char DirSep = Path.DirectorySeparatorChar;
-        private static readonly char AltDirSep = Path.DirectorySeparatorChar == '/' ? '\\' : '/';
+        private static readonly char AltDirSep = '/';
 
         [Test]
         public void Does_get_ParentDirectory()
@@ -177,6 +238,7 @@ namespace ServiceStack.Text.Tests
             Assert.That("lllUlllUlll".ToCamelCase(), Is.EqualTo("lllUlllUlll"));
             Assert.That("".ToCamelCase(), Is.EqualTo(""));
             Assert.That(((string)null).ToCamelCase(), Is.EqualTo((string)null));
+            Assert.That("__type".ToCamelCase(), Is.EqualTo("__type"));
         }
 
         [Test]
@@ -240,7 +302,7 @@ namespace ServiceStack.Text.Tests
             Assert.That("a".ParseKeyValueText().Count, Is.EqualTo(1));
             Assert.That("a".ParseKeyValueText()["a"], Is.Null);
             Assert.That("a ".ParseKeyValueText().Count, Is.EqualTo(1));
-            Assert.That("a ".ParseKeyValueText()["a"], Is.EqualTo(""));
+            Assert.That("a ".ParseKeyValueText()["a"], Is.Null);
             Assert.That("a b".ParseKeyValueText()["a"], Is.EqualTo("b"));
             Assert.That("a b c".ParseKeyValueText()["a"], Is.EqualTo("b c"));
             Assert.That("a  b c ".ParseKeyValueText()["a"], Is.EqualTo("b c"));
@@ -266,7 +328,85 @@ namespace ServiceStack.Text.Tests
             Assert.That(input.SafeSubstring(2, 4), Is.EqualTo("stSt"));
             Assert.That(input.SafeSubstring(20, 4), Is.EqualTo(""));
             Assert.That(input.SafeSubstring(0, 20), Is.EqualTo("TestString"));
+        }
 
+        [Test]
+        public void Can_convert_ToPascalCase()
+        {
+            Assert.That(((string)null).ToPascalCase(), Is.Null);
+            Assert.That("".ToPascalCase(), Is.EqualTo(""));
+            Assert.That("a".ToPascalCase(), Is.EqualTo("A"));
+            Assert.That("aB".ToPascalCase(), Is.EqualTo("AB"));
+            Assert.That("AB".ToPascalCase(), Is.EqualTo("Ab"));
+            Assert.That("aaBb".ToPascalCase(), Is.EqualTo("AaBb"));
+            Assert.That("aaBbCc".ToPascalCase(), Is.EqualTo("AaBbCc"));
+            Assert.That("a_B".ToPascalCase(), Is.EqualTo("AB"));
+            Assert.That("a_b".ToPascalCase(), Is.EqualTo("AB"));
+            Assert.That("aa_bb".ToPascalCase(), Is.EqualTo("AaBb"));
+            Assert.That("Aa_Bb".ToPascalCase(), Is.EqualTo("AaBb"));
+            Assert.That("AA_BB".ToPascalCase(), Is.EqualTo("AaBb"));
+            Assert.That("__type".ToPascalCase(), Is.EqualTo("Type"));
+        }
+
+        [Test]
+        public void Does_ContainsAny_Return_CaseInsensitive_Matches()
+        {
+            var testMatches = new string[] { "abc" };
+            var input = "ABC";
+
+            Assert.That(input.ContainsAny(testMatches, StringComparison.OrdinalIgnoreCase));
+        }
+
+        [Test]
+        public void Does_ReplaceAll_from_Start()
+        {
+            Assert.That("/images".ReplaceAll("/",""), Is.EqualTo("images"));
+        }
+
+        [Test]
+        public void Does_ReplaceAll_Avoid_Infinite_Loops()
+        {
+            var input = "image";
+            var output = input;
+
+            output = input.ReplaceAll("image", "images");
+
+            Assert.That(output, Is.EqualTo("images"));
+        }
+
+        [TestCase("", ExpectedResult = "/")]
+        [TestCase("/", ExpectedResult = "/")]
+        [TestCase("?p1=asdf", ExpectedResult = "/?p1=asdf")]
+        [TestCase("/page", ExpectedResult = "/page/")]
+        [TestCase("/page/", ExpectedResult = "/page/")]
+        [TestCase("/page?p1=asdf", ExpectedResult = "/page/?p1=asdf")]
+        [TestCase("/page?p1=asdf&p2=asdf", ExpectedResult = "/page/?p1=asdf&p2=asdf")]
+        [TestCase("/page/?p1=asdf&p2=asdf", ExpectedResult = "/page/?p1=asdf&p2=asdf")]
+
+        [TestCase("#here", ExpectedResult = "/#here")]
+        [TestCase("?p1=asdf#here", ExpectedResult = "/?p1=asdf#here")]
+        [TestCase("/page#here", ExpectedResult = "/page/#here")]
+        [TestCase("/page/#here", ExpectedResult = "/page/#here")]
+        [TestCase("/page?p1=asdf#here", ExpectedResult = "/page/?p1=asdf#here")]
+        [TestCase("/page?p1=asdf&p2=asdf#here", ExpectedResult = "/page/?p1=asdf&p2=asdf#here")]
+        [TestCase("/page/?p1=asdf&p2=asdf#here", ExpectedResult = "/page/?p1=asdf&p2=asdf#here")]
+
+        [TestCase("domain.com", ExpectedResult = "domain.com/")]
+        [TestCase("domain.com/", ExpectedResult = "domain.com/")]
+        [TestCase("domain.com?p1=asdf", ExpectedResult = "domain.com/?p1=asdf")]
+        [TestCase("domain.com/page?p1=asdf", ExpectedResult = "domain.com/page/?p1=asdf")]
+        [TestCase("domain.com/page?p1=asdf&p2=asdf", ExpectedResult = "domain.com/page/?p1=asdf&p2=asdf")]
+        [TestCase("domain.com/page/?p1=asdf&p2=asdf", ExpectedResult = "domain.com/page/?p1=asdf&p2=asdf")]
+
+        [TestCase("domain.com#here", ExpectedResult = "domain.com/#here")]
+        [TestCase("domain.com/#here", ExpectedResult = "domain.com/#here")]
+        [TestCase("domain.com?p1=asdf#here", ExpectedResult = "domain.com/?p1=asdf#here")]
+        [TestCase("domain.com/page?p1=asdf#here", ExpectedResult = "domain.com/page/?p1=asdf#here")]
+        [TestCase("domain.com/page?p1=asdf&p2=asdf#here", ExpectedResult = "domain.com/page/?p1=asdf&p2=asdf#here")]
+        [TestCase("domain.com/page/?p1=asdf&p2=asdf#here", ExpectedResult = "domain.com/page/?p1=asdf&p2=asdf#here")]
+        public string Does_UrlWithTrailingSlash(string url)
+        {
+            return url.UrlWithTrailingSlash();
         }
     }
 }

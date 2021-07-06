@@ -5,7 +5,7 @@
 // Authors:
 //   Demis Bellot (demis.bellot@gmail.com)
 //
-// Copyright 2012 Service Stack LLC. All Rights Reserved.
+// Copyright 2012 ServiceStack, Inc. All Rights Reserved.
 //
 // Licensed under the same terms of ServiceStack.
 //
@@ -27,8 +27,7 @@ namespace ServiceStack.Text
 
         public static object TranslateToGenericICollectionCache(object from, Type toInstanceOfType, Type elementType)
         {
-            ConvertInstanceDelegate translateToFn;
-            if (TranslateICollectionCache.TryGetValue(toInstanceOfType, out translateToFn))
+            if (TranslateICollectionCache.TryGetValue(toInstanceOfType, out var translateToFn))
                 return translateToFn(from, toInstanceOfType);
 
             var genericType = typeof(TranslateListWithElements<>).MakeGenericType(elementType);
@@ -39,8 +38,9 @@ namespace ServiceStack.Text
             do
             {
                 snapshot = TranslateICollectionCache;
-                newCache = new Dictionary<Type, ConvertInstanceDelegate>(TranslateICollectionCache);
-                newCache[elementType] = translateToFn;
+                newCache = new Dictionary<Type, ConvertInstanceDelegate>(TranslateICollectionCache) {
+                    [elementType] = translateToFn
+                };
 
             } while (!ReferenceEquals(
                 Interlocked.CompareExchange(ref TranslateICollectionCache, newCache, snapshot), snapshot));
@@ -55,10 +55,9 @@ namespace ServiceStack.Text
             object from, Type toInstanceOfType, Type fromElementType)
         {
             var typeKey = new ConvertibleTypeKey(toInstanceOfType, fromElementType);
-            ConvertInstanceDelegate translateToFn;
-            if (TranslateConvertibleICollectionCache.TryGetValue(typeKey, out translateToFn)) return translateToFn(from, toInstanceOfType);
+            if (TranslateConvertibleICollectionCache.TryGetValue(typeKey, out var translateToFn)) return translateToFn(from, toInstanceOfType);
 
-            var toElementType = toInstanceOfType.FirstGenericType().GenericTypeArguments()[0];
+            var toElementType = toInstanceOfType.FirstGenericType().GetGenericArguments()[0];
             var genericType = typeof(TranslateListWithConvertibleElements<,>).MakeGenericType(fromElementType, toElementType);
             var mi = genericType.GetStaticMethod("LateBoundTranslateToGenericICollection");
             translateToFn = (ConvertInstanceDelegate)mi.MakeDelegate(typeof(ConvertInstanceDelegate));
@@ -67,8 +66,9 @@ namespace ServiceStack.Text
             do
             {
                 snapshot = TranslateConvertibleICollectionCache;
-                newCache = new Dictionary<ConvertibleTypeKey, ConvertInstanceDelegate>(TranslateConvertibleICollectionCache);
-                newCache[typeKey] = translateToFn;
+                newCache = new Dictionary<ConvertibleTypeKey, ConvertInstanceDelegate>(TranslateConvertibleICollectionCache) {
+                    [typeKey] = translateToFn
+                };
 
             } while (!ReferenceEquals(
                 Interlocked.CompareExchange(ref TranslateConvertibleICollectionCache, newCache, snapshot), snapshot));
@@ -96,31 +96,36 @@ namespace ServiceStack.Text
                     fromValue, toPropertyType, varArgs.Args1[0]);
             }
 
-            return null;
-        }
+            var fromElType = fromPropertyType.GetCollectionType();
+            var toElType = toPropertyType.GetCollectionType();
 
+            if (fromElType == null || toElType == null)
+                return null;
+
+            return TranslateToGenericICollectionCache(fromValue, toPropertyType, toElType);
+        }
     }
 
     public class ConvertibleTypeKey
     {
         public Type ToInstanceType { get; set; }
-        public Type FromElemenetType { get; set; }
+        public Type FromElementType { get; set; }
 
         public ConvertibleTypeKey()
         {
         }
 
-        public ConvertibleTypeKey(Type toInstanceType, Type fromElemenetType)
+        public ConvertibleTypeKey(Type toInstanceType, Type fromElementType)
         {
             ToInstanceType = toInstanceType;
-            FromElemenetType = fromElemenetType;
+            FromElementType = fromElementType;
         }
 
         public bool Equals(ConvertibleTypeKey other)
         {
             if (ReferenceEquals(null, other)) return false;
             if (ReferenceEquals(this, other)) return true;
-            return Equals(other.ToInstanceType, ToInstanceType) && Equals(other.FromElemenetType, FromElemenetType);
+            return other.ToInstanceType == ToInstanceType && other.FromElementType == FromElementType;
         }
 
         public override bool Equals(object obj)
@@ -136,7 +141,7 @@ namespace ServiceStack.Text
             unchecked
             {
                 return ((ToInstanceType != null ? ToInstanceType.GetHashCode() : 0) * 397)
-                    ^ (FromElemenetType != null ? FromElemenetType.GetHashCode() : 0);
+                    ^ (FromElementType != null ? FromElementType.GetHashCode() : 0);
             }
         }
     }
@@ -145,7 +150,7 @@ namespace ServiceStack.Text
     {
         public static object CreateInstance(Type toInstanceOfType)
         {
-            if (toInstanceOfType.IsGeneric())
+            if (toInstanceOfType.IsGenericType)
             {
                 if (toInstanceOfType.HasAnyTypeDefinitionsOf(
                     typeof(ICollection<>), typeof(IList<>)))
@@ -176,21 +181,29 @@ namespace ServiceStack.Text
             if (toInstanceOfType.IsArray)
             {
                 var result = TranslateToGenericICollection(
-                    (ICollection<T>)fromList, typeof(List<T>));
+                    (IEnumerable)fromList, typeof(List<T>));
                 return result.ToArray();
             }
 
             return TranslateToGenericICollection(
-                (ICollection<T>)fromList, toInstanceOfType);
+                (IEnumerable)fromList, toInstanceOfType);
         }
 
         public static ICollection<T> TranslateToGenericICollection(
-            ICollection<T> fromList, Type toInstanceOfType)
+            IEnumerable fromList, Type toInstanceOfType)
         {
             var to = (ICollection<T>)CreateInstance(toInstanceOfType);
             foreach (var item in fromList)
             {
-                to.Add(item);
+                if (item is IEnumerable<KeyValuePair<string, object>> dictionary)
+                {
+                    var convertedItem = dictionary.FromObjectDictionary<T>();
+                    to.Add(convertedItem);
+                }
+                else
+                {
+                    to.Add((T)item);
+                }
             }
             return to;
         }

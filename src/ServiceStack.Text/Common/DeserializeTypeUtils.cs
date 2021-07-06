@@ -5,7 +5,7 @@
 // Authors:
 //   Demis Bellot (demis.bellot@gmail.com)
 //
-// Copyright 2012 Service Stack LLC. All Rights Reserved.
+// Copyright 2012 ServiceStack, Inc. All Rights Reserved.
 //
 // Licensed under the same terms of ServiceStack.
 //
@@ -17,12 +17,14 @@ namespace ServiceStack.Text.Common
 {
     public class DeserializeTypeUtils
     {
-        public static ParseStringDelegate GetParseMethod(Type type)
+        public static ParseStringDelegate GetParseMethod(Type type) => v => GetParseStringSpanMethod(type)(v.AsSpan());
+
+        public static ParseStringSpanDelegate GetParseStringSpanMethod(Type type)
         {
             var typeConstructor = GetTypeStringConstructor(type);
             if (typeConstructor != null)
             {
-                return value => typeConstructor.Invoke(new object[] { value });
+                return value => typeConstructor.Invoke(new object[] { value.ToString() });
             }
 
             return null;
@@ -35,10 +37,10 @@ namespace ServiceStack.Text.Common
         /// <returns></returns>
         public static ConstructorInfo GetTypeStringConstructor(Type type)
         {
-            foreach (var ci in type.DeclaredConstructors())
+            foreach (var ci in type.GetConstructors())
             {
                 var paramInfos = ci.GetParameters();
-                var matchFound = (paramInfos.Length == 1 && paramInfos[0].ParameterType == typeof(string));
+                var matchFound = paramInfos.Length == 1 && paramInfos[0].ParameterType == typeof(string);
                 if (matchFound)
                 {
                     return ci;

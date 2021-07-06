@@ -19,7 +19,6 @@ namespace ServiceStack.Text
 
         private static Dictionary<string, Type> TypeCache = new Dictionary<string, Type>();
 
-#if !XBOX
         /// <summary>
         /// Find the type from the name supplied
         /// </summary>
@@ -27,12 +26,9 @@ namespace ServiceStack.Text
         /// <returns></returns>
         public static Type FindType(string typeName)
         {
-            Type type = null;
-            if (TypeCache.TryGetValue(typeName, out type)) return type;
+            if (TypeCache.TryGetValue(typeName, out var type)) return type;
 
-#if !SL5
             type = Type.GetType(typeName);
-#endif
             if (type == null)
             {
                 var typeDef = new AssemblyTypeDefinition(typeName);
@@ -45,15 +41,13 @@ namespace ServiceStack.Text
             do
             {
                 snapshot = TypeCache;
-                newCache = new Dictionary<string, Type>(TypeCache);
-                newCache[typeName] = type;
+                newCache = new Dictionary<string, Type>(TypeCache) { [typeName] = type };
 
             } while (!ReferenceEquals(
                 Interlocked.CompareExchange(ref TypeCache, newCache, snapshot), snapshot));
 
             return type;
         }
-#endif
 
         /// <summary>
         /// The top-most interface of the given type, if any.
@@ -61,13 +55,13 @@ namespace ServiceStack.Text
         public static Type MainInterface<T>()
         {
             var t = typeof(T);
-            if (t.BaseType() == typeof(object))
+            if (t.BaseType == typeof(object))
             {
                 // on Windows, this can be just "t.GetInterfaces()" but Mono doesn't return in order.
-                var interfaceType = t.Interfaces().FirstOrDefault(i => !t.Interfaces().Any(i2 => i2.Interfaces().Contains(i)));
+                var interfaceType = t.GetInterfaces().FirstOrDefault(i => !t.GetInterfaces().Any(i2 => i2.GetInterfaces().Contains(i)));
                 if (interfaceType != null) return interfaceType;
             }
-            return t; // not safe to use interface, as it might be a superclass's one.
+            return t; // not safe to use interface, as it might be a superclass one.
         }
 
         /// <summary>

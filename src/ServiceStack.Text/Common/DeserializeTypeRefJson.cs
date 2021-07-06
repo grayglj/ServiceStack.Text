@@ -1,109 +1,80 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
-using System.Reflection;
 using ServiceStack.Text.Json;
 
 namespace ServiceStack.Text.Common
 {
-    // Provides a contract for mapping properties to their type accessors
-    internal interface IPropertyNameResolver
-    {
-        TypeAccessor GetTypeAccessorForProperty(string propertyName, Dictionary<string, TypeAccessor> typeAccessorMap);
-    }
-    // The default behavior is that the target model must match property names exactly
-    internal class DefaultPropertyNameResolver : IPropertyNameResolver
-    {
-        public virtual TypeAccessor GetTypeAccessorForProperty(string propertyName, Dictionary<string, TypeAccessor> typeAccessorMap)
-        {
-            TypeAccessor typeAccessor;
-            typeAccessorMap.TryGetValue(propertyName, out typeAccessor);
-            return typeAccessor;
-        }
-    }
-    // The lenient behavior is that properties on the target model can be .NET-cased, while the source JSON can differ
-    internal class LenientPropertyNameResolver : DefaultPropertyNameResolver
-    {
-
-        public override TypeAccessor GetTypeAccessorForProperty(string propertyName, Dictionary<string, TypeAccessor> typeAccessorMap)
-        {
-            TypeAccessor typeAccessor;
-
-            // map is case-insensitive by default, so simply remove hyphens and underscores
-            return typeAccessorMap.TryGetValue(RemoveSeparators(propertyName), out typeAccessor)
-                       ? typeAccessor
-                       : base.GetTypeAccessorForProperty(propertyName, typeAccessorMap);
-        }
-
-        private static string RemoveSeparators(string propertyName)
-        {
-            // "lowercase-hyphen" or "lowercase_underscore" -> lowercaseunderscore
-            return propertyName.Replace("-", String.Empty).Replace("_", String.Empty);
-        }
-
-    }
-
     internal static class DeserializeTypeRefJson
     {
         private static readonly JsonTypeSerializer Serializer = (JsonTypeSerializer)JsonTypeSerializer.Instance;
 
-        internal static object StringToType(
-        TypeConfig typeConfig,
-        string strType,
-        EmptyCtorDelegate ctorFn,
-        Dictionary<string, TypeAccessor> typeAccessorMap)
+        internal static object StringToType(ReadOnlySpan<char> strType,
+            TypeConfig typeConfig,
+            EmptyCtorDelegate ctorFn,
+            KeyValuePair<string, TypeAccessor>[] typeAccessors)
         {
             var index = 0;
             var type = typeConfig.Type;
 
-            if (strType == null)
+            if (strType.IsEmpty)
                 return null;
 
-            //if (!Serializer.EatMapStartChar(strType, ref index))
-            for (; index < strType.Length; index++) { var c = strType[index]; if (c >= JsonTypeSerializer.WhiteSpaceFlags.Length || !JsonTypeSerializer.WhiteSpaceFlags[c]) break; } //Whitespace inline
-            if (strType[index++] != JsWriter.MapStartChar)
-                throw DeserializeTypeRef.CreateSerializationError(type, strType);
+            var buffer = strType;
+            var strTypeLength = strType.Length;
 
-            if (JsonTypeSerializer.IsEmptyMap(strType, index)) return ctorFn();
+            //if (!Serializer.EatMapStartChar(strType, ref index))
+            for (; index < strTypeLength; index++) { if (!JsonUtils.IsWhiteSpace(buffer[index])) break; } //Whitespace inline
+            if (buffer[index] != JsWriter.MapStartChar)
+                throw DeserializeTypeRef.CreateSerializationError(type, strType.ToString());
+
+            index++;
+            if (JsonTypeSerializer.IsEmptyMap(strType, index)) 
+                return ctorFn();
+
+            var config = JsConfig.GetConfig();
+            var typeAttr = config.TypeAttrMemory;
 
             object instance = null;
+            var lenient = config.PropertyConvention == PropertyConvention.Lenient;
 
-            var propertyResolver = JsConfig.PropertyConvention == PropertyConvention.Lenient
-                ? ParseUtils.LenientPropertyNameResolver
-                : ParseUtils.DefaultPropertyNameResolver;
+            for (; index < strTypeLength; index++) { if (!JsonUtils.IsWhiteSpace(buffer[index])) break; } //Whitespace inline
 
-            var strTypeLength = strType.Length;
             while (index < strTypeLength)
             {
-                var propertyName = JsonTypeSerializer.ParseJsonString(strType, ref index);
+                var propertyName = JsonTypeSerializer.UnescapeJsString(strType, JsonUtils.QuoteChar, removeQuotes:true, ref index);
 
                 //Serializer.EatMapKeySeperator(strType, ref index);
-                for (; index < strType.Length; index++) { var c = strType[index]; if (c >= JsonTypeSerializer.WhiteSpaceFlags.Length || !JsonTypeSerializer.WhiteSpaceFlags[c]) break; } //Whitespace inline
-                if (strType.Length != index) index++;
+                for (; index < strTypeLength; index++) { if (!JsonUtils.IsWhiteSpace(buffer[index])) break; } //Whitespace inline
+                if (strTypeLength != index) index++;
 
                 var propertyValueStr = Serializer.EatValue(strType, ref index);
                 var possibleTypeInfo = propertyValueStr != null && propertyValueStr.Length > 1;
 
                 //if we already have an instance don't check type info, because then we will have a half deserialized object
                 //we could throw here or just use the existing instance.
-                if (instance == null && possibleTypeInfo && propertyName == JsWriter.TypeAttr)
+                if (instance == null && possibleTypeInfo && propertyName.Equals(typeAttr.Span, StringComparison.OrdinalIgnoreCase))
                 {
                     var explicitTypeName = Serializer.ParseString(propertyValueStr);
-                    var explicitType = JsConfig.TypeFinder(explicitTypeName);
+                    var explicitType = config.TypeFinder(explicitTypeName);
 
-                    if (explicitType != null && !explicitType.IsInterface() && !explicitType.IsAbstract())
+                    if (explicitType == null || explicitType.IsInterface || explicitType.IsAbstract)
                     {
-                        instance = explicitType.CreateInstance();
+                        Tracer.Instance.WriteWarning("Could not find type: " + propertyValueStr.ToString());
                     }
-
-                    if (instance == null)
+                    else if (!type.IsAssignableFrom(explicitType))
                     {
-                        Tracer.Instance.WriteWarning("Could not find type: " + propertyValueStr);
+                        Tracer.Instance.WriteWarning("Could not assign type: " + propertyValueStr.ToString());
                     }
                     else
                     {
+                        JsWriter.AssertAllowedRuntimeType(explicitType);
+                        instance = explicitType.CreateInstance();
+                    }
+
+                    if (instance != null)
+                    {
                         //If __type info doesn't match, ignore it.
-                        if (!type.InstanceOfType(instance))
+                        if (!type.IsInstanceOfType(instance))
                         {
                             instance = null;
                         }
@@ -112,12 +83,9 @@ namespace ServiceStack.Text.Common
                             var derivedType = instance.GetType();
                             if (derivedType != type)
                             {
-                                var derivedTypeConfig = new TypeConfig(derivedType);
-                                var map = DeserializeTypeRef.GetTypeAccessorMap(derivedTypeConfig, Serializer);
+                                var map = DeserializeTypeRef.GetCachedTypeAccessors(derivedType, Serializer);
                                 if (map != null)
-                                {
-                                    typeAccessorMap = map;
-                                }
+                                    typeAccessors = map;
                             }
                         }
                     }
@@ -128,7 +96,7 @@ namespace ServiceStack.Text.Common
 
                 if (instance == null) instance = ctorFn();
 
-                var typeAccessor = propertyResolver.GetTypeAccessorForProperty(propertyName, typeAccessorMap);
+                var typeAccessor = typeAccessors.Get(propertyName, lenient);
 
                 var propType = possibleTypeInfo && propertyValueStr[0] == '_' ? TypeAccessor.ExtractType(Serializer, propertyValueStr) : null;
                 if (propType != null)
@@ -138,62 +106,65 @@ namespace ServiceStack.Text.Common
                         if (typeAccessor != null)
                         {
                             //var parseFn = Serializer.GetParseFn(propType);
-                            var parseFn = JsonReader.GetParseFn(propType);
+                            var parseFn = JsonReader.GetParseStringSpanFn(propType);
 
                             var propertyValue = parseFn(propertyValueStr);
                             if (typeConfig.OnDeserializing != null)
-                                propertyValue = typeConfig.OnDeserializing(instance, propertyName, propertyValue);
+                                propertyValue = typeConfig.OnDeserializing(instance, propertyName.ToString(), propertyValue);
                             typeAccessor.SetProperty(instance, propertyValue);
                         }
 
                         //Serializer.EatItemSeperatorOrMapEndChar(strType, ref index);
-                        for (; index < strType.Length; index++) { var c = strType[index]; if (c >= JsonTypeSerializer.WhiteSpaceFlags.Length || !JsonTypeSerializer.WhiteSpaceFlags[c]) break; } //Whitespace inline
-                        if (index != strType.Length)
+                        for (; index < strTypeLength; index++) { if (!JsonUtils.IsWhiteSpace(buffer[index])) break; } //Whitespace inline
+                        if (index != strTypeLength)
                         {
-                            var success = strType[index] == JsWriter.ItemSeperator || strType[index] == JsWriter.MapEndChar;
+                            var success = buffer[index] == JsWriter.ItemSeperator || buffer[index] == JsWriter.MapEndChar;
                             index++;
                             if (success)
-                                for (; index < strType.Length; index++) { var c = strType[index]; if (c >= JsonTypeSerializer.WhiteSpaceFlags.Length || !JsonTypeSerializer.WhiteSpaceFlags[c]) break; } //Whitespace inline
+                                for (; index < strTypeLength; index++) { if (!JsonUtils.IsWhiteSpace(buffer[index])) break; } //Whitespace inline
                         }
 
                         continue;
                     }
                     catch (Exception e)
                     {
-                        if (JsConfig.ThrowOnDeserializationError) throw DeserializeTypeRef.GetSerializationException(propertyName, propertyValueStr, propType, e);
-                        else Tracer.Instance.WriteWarning("WARN: failed to set dynamic property {0} with: {1}", propertyName, propertyValueStr);
+                        config.OnDeserializationError?.Invoke(instance, propType, propertyName.ToString(), propertyValueStr.ToString(), e);
+                        if (config.ThrowOnError) throw DeserializeTypeRef.GetSerializationException(propertyName.ToString(), propertyValueStr.ToString(), propType, e);
+                        else Tracer.Instance.WriteWarning("WARN: failed to set dynamic property {0} with: {1}", propertyName.ToString(), propertyValueStr.ToString());
                     }
                 }
 
-                if (typeAccessor != null && typeAccessor.GetProperty != null && typeAccessor.SetProperty != null)
+                if (typeAccessor?.GetProperty != null && typeAccessor.SetProperty != null)
                 {
                     try
                     {
                         var propertyValue = typeAccessor.GetProperty(propertyValueStr);
                         if (typeConfig.OnDeserializing != null)
-                            propertyValue = typeConfig.OnDeserializing(instance, propertyName, propertyValue);
+                            propertyValue = typeConfig.OnDeserializing(instance, propertyName.ToString(), propertyValue);
                         typeAccessor.SetProperty(instance, propertyValue);
                     }
+                    catch (NotSupportedException) { throw; }
                     catch (Exception e)
                     {
-                        if (JsConfig.ThrowOnDeserializationError) throw DeserializeTypeRef.GetSerializationException(propertyName, propertyValueStr, typeAccessor.PropertyType, e);
-                        else Tracer.Instance.WriteWarning("WARN: failed to set property {0} with: {1}", propertyName, propertyValueStr);
+                        config.OnDeserializationError?.Invoke(instance, propType ?? typeAccessor.PropertyType, propertyName.ToString(), propertyValueStr.ToString(), e);
+                        if (config.ThrowOnError) throw DeserializeTypeRef.GetSerializationException(propertyName.ToString(), propertyValueStr.ToString(), typeAccessor.PropertyType, e);
+                        else Tracer.Instance.WriteWarning("WARN: failed to set property {0} with: {1}", propertyName.ToString(), propertyValueStr.ToString());
                     }
                 }
-                else if (typeConfig.OnDeserializing != null)
+                else
                 {
                     // the property is not known by the DTO
-                    typeConfig.OnDeserializing(instance, propertyName, propertyValueStr);
+                    typeConfig.OnDeserializing?.Invoke(instance, propertyName.ToString(), propertyValueStr.ToString());
                 }
 
                 //Serializer.EatItemSeperatorOrMapEndChar(strType, ref index);
-                for (; index < strType.Length; index++) { var c = strType[index]; if (c >= JsonTypeSerializer.WhiteSpaceFlags.Length || !JsonTypeSerializer.WhiteSpaceFlags[c]) break; } //Whitespace inline
+                for (; index < strTypeLength; index++) { if (!JsonUtils.IsWhiteSpace(buffer[index])) break; } //Whitespace inline
                 if (index != strType.Length)
                 {
-                    var success = strType[index] == JsWriter.ItemSeperator || strType[index] == JsWriter.MapEndChar;
+                    var success = buffer[index] == JsWriter.ItemSeperator || buffer[index] == JsWriter.MapEndChar;
                     index++;
                     if (success)
-                        for (; index < strType.Length; index++) { var c = strType[index]; if (c >= JsonTypeSerializer.WhiteSpaceFlags.Length || !JsonTypeSerializer.WhiteSpaceFlags[c]) break; } //Whitespace inline
+                        for (; index < strTypeLength; index++) { if (!JsonUtils.IsWhiteSpace(buffer[index])) break; } //Whitespace inline
                 }
 
             }

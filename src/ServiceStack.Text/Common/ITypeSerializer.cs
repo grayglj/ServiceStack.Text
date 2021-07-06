@@ -4,9 +4,14 @@ using ServiceStack.Text.Json;
 
 namespace ServiceStack.Text.Common
 {
+    public delegate object ObjectDeserializerDelegate(ReadOnlySpan<char> value);
+    
     public interface ITypeSerializer
     {
+        ObjectDeserializerDelegate ObjectDeserializer { get; set; }
+
         bool IncludeNullValues { get; }
+        bool IncludeNullValuesInDictionaries { get; }
         string TypeAttrInObject { get; }
 
         WriteObjectDelegate GetWriteFn<T>();
@@ -32,6 +37,7 @@ namespace ServiceStack.Text.Common
         void WriteBytes(TextWriter writer, object oByteValue);
         void WriteChar(TextWriter writer, object charValue);
         void WriteByte(TextWriter writer, object byteValue);
+        void WriteSByte(TextWriter writer, object sbyteValue);
         void WriteInt16(TextWriter writer, object intValue);
         void WriteUInt16(TextWriter writer, object intValue);
         void WriteInt32(TextWriter writer, object intValue);
@@ -43,24 +49,33 @@ namespace ServiceStack.Text.Common
         void WriteDouble(TextWriter writer, object doubleValue);
         void WriteDecimal(TextWriter writer, object decimalValue);
         void WriteEnum(TextWriter writer, object enumValue);
-        void WriteEnumFlags(TextWriter writer, object enumFlagValue);
-        void WriteLinqBinary(TextWriter writer, object linqBinaryValue);
-
-        //object EncodeMapKey(object value);
 
         ParseStringDelegate GetParseFn<T>();
+        ParseStringSpanDelegate GetParseStringSpanFn<T>();
         ParseStringDelegate GetParseFn(Type type);
+        ParseStringSpanDelegate GetParseStringSpanFn(Type type);
 
         string ParseRawString(string value);
         string ParseString(string value);
+        string ParseString(ReadOnlySpan<char> value);
         string UnescapeString(string value);
+        ReadOnlySpan<char> UnescapeString(ReadOnlySpan<char> value);
+        object UnescapeStringAsObject(ReadOnlySpan<char> value);
         string UnescapeSafeString(string value);
+        ReadOnlySpan<char> UnescapeSafeString(ReadOnlySpan<char> value);
         string EatTypeValue(string value, ref int i);
+        ReadOnlySpan<char> EatTypeValue(ReadOnlySpan<char> value, ref int i);
         bool EatMapStartChar(string value, ref int i);
+        bool EatMapStartChar(ReadOnlySpan<char> value, ref int i);
         string EatMapKey(string value, ref int i);
+        ReadOnlySpan<char> EatMapKey(ReadOnlySpan<char> value, ref int i);
         bool EatMapKeySeperator(string value, ref int i);
+        bool EatMapKeySeperator(ReadOnlySpan<char> value, ref int i);
         void EatWhitespace(string value, ref int i);
+        void EatWhitespace(ReadOnlySpan<char> value, ref int i);
         string EatValue(string value, ref int i);
+        ReadOnlySpan<char> EatValue(ReadOnlySpan<char> value, ref int i);
         bool EatItemSeperatorOrMapEndChar(string value, ref int i);
+        bool EatItemSeperatorOrMapEndChar(ReadOnlySpan<char> value, ref int i);
     }
 }

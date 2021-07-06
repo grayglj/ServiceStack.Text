@@ -5,7 +5,7 @@
 // Authors:
 //   Demis Bellot (demis.bellot@gmail.com)
 //
-// Copyright 2012 Service Stack LLC. All Rights Reserved.
+// Copyright 2012 ServiceStack, Inc. All Rights Reserved.
 //
 // Licensed under the same terms of ServiceStack.
 //
@@ -14,8 +14,10 @@ using System;
 using System.Globalization;
 using System.IO;
 using System.Text;
-using System.Xml;
 using ServiceStack.Text.Json;
+using ServiceStack.Text.Support;
+using System.Text.RegularExpressions;
+using ServiceStack.Text.Pools;
 
 namespace ServiceStack.Text.Common
 {
@@ -29,7 +31,9 @@ namespace ServiceStack.Text.Common
         public const string XsdDateTimeFormat3F = "yyyy-MM-ddTHH:mm:ss.fffZ";                 //25
         public const string XsdDateTimeFormatSeconds = "yyyy-MM-ddTHH:mm:ssZ";                //21
         public const string DateTimeFormatSecondsUtcOffset = "yyyy-MM-ddTHH:mm:sszzz";        //22
+        public const string DateTimeFormatSecondsNoOffset = "yyyy-MM-ddTHH:mm:ss";
         public const string DateTimeFormatTicksUtcOffset = "yyyy-MM-ddTHH:mm:ss.fffffffzzz";  //30
+        public const string DateTimeFormatTicksNoUtcOffset = "yyyy-MM-ddTHH:mm:ss.fffffff";
 
         public const string EscapedWcfJsonPrefix = "\\/Date(";
         public const string EscapedWcfJsonSuffix = ")\\/";
@@ -41,21 +45,24 @@ namespace ServiceStack.Text.Common
         private const char XsdTimeSeparator = 'T';
         private static readonly int XsdTimeSeparatorIndex = XsdDateTimeFormat.IndexOf(XsdTimeSeparator);
         private const string XsdUtcSuffix = "Z";
-        private static readonly char[] DateTimeSeperators = new[] { '-', '/' };
-
+        private static readonly char[] DateTimeSeparators = { '-', '/' };
+        private static readonly Regex UtcOffsetInfoRegex = new Regex("([+-](?:2[0-3]|[0-1][0-9]):[0-5][0-9])", PclExport.Instance.RegexOptions);
         public static Func<string, Exception, DateTime> OnParseErrorFn { get; set; }
 
         /// <summary>
-        /// If AlwaysUseUtc is set to true then convert all DateTime to UTC.
+        /// If AlwaysUseUtc is set to true then convert all DateTime to UTC. If PreserveUtc is set to true then UTC dates will not convert to local
         /// </summary>
         /// <param name="dateTime"></param>
         /// <returns></returns>
-        public static DateTime Prepare(this DateTime dateTime, bool parsedAsUtc=false)
+        public static DateTime Prepare(this DateTime dateTime, bool parsedAsUtc = false)
         {
-            if (JsConfig.AlwaysUseUtc)
-            {
+            var config = JsConfig.GetConfig();
+            if (config.SkipDateTimeConversion)
+                return dateTime;
+
+            if (config.AlwaysUseUtc)
                 return dateTime.Kind != DateTimeKind.Utc ? dateTime.ToStableUniversalTime() : dateTime;
-            }
+
             return parsedAsUtc ? dateTime.ToLocalTime() : dateTime;
         }
 
@@ -82,27 +89,45 @@ namespace ServiceStack.Text.Common
                 if (dateTimeStr.StartsWith(EscapedWcfJsonPrefix, StringComparison.Ordinal) || dateTimeStr.StartsWith(WcfJsonPrefix, StringComparison.Ordinal))
                     return ParseWcfJsonDate(dateTimeStr).Prepare();
 
-                if (dateTimeStr.Length == DefaultDateTimeFormat.Length
-                    || dateTimeStr.Length == DefaultDateTimeFormatWithFraction.Length)
+                var config = JsConfig.GetConfig();
+                if (dateTimeStr.Length == DefaultDateTimeFormat.Length)
                 {
                     var unspecifiedDate = DateTime.Parse(dateTimeStr, CultureInfo.InvariantCulture);
-                    if (JsConfig.AssumeUtc)
+
+                    if (config.AssumeUtc)
                         unspecifiedDate = DateTime.SpecifyKind(unspecifiedDate, DateTimeKind.Utc);
 
                     return unspecifiedDate.Prepare();
                 }
 
-                switch (JsConfig.DateHandler)
+                var hasUtcSuffix = dateTimeStr.EndsWith(XsdUtcSuffix);
+                if (!hasUtcSuffix && dateTimeStr.Length == DefaultDateTimeFormatWithFraction.Length)
+                {
+                    var unspecifiedDate = config.AssumeUtc
+                        ? DateTime.Parse(dateTimeStr, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal)
+                        : DateTime.Parse(dateTimeStr, CultureInfo.InvariantCulture);
+
+                    return unspecifiedDate.Prepare();
+                }
+
+                var kind = hasUtcSuffix
+                    ? DateTimeKind.Utc
+                    : DateTimeKind.Unspecified;
+                switch (config.DateHandler)
                 {
                     case DateHandler.UnixTime:
-                        int unixTime;
-                        if (int.TryParse(dateTimeStr, out unixTime))
+                        if (int.TryParse(dateTimeStr, out var unixTime))
                             return unixTime.FromUnixTime();
                         break;
                     case DateHandler.UnixTimeMs:
-                        long unixTimeMs;
-                        if (long.TryParse(dateTimeStr, out unixTimeMs))
+                        if (long.TryParse(dateTimeStr, out var unixTimeMs))
                             return unixTimeMs.FromUnixTimeMs();
+                        break;
+                    case DateHandler.ISO8601:
+                    case DateHandler.ISO8601DateOnly:
+                    case DateHandler.ISO8601DateTime:
+                        if (config.SkipDateTimeConversion)
+                            dateTimeStr = RemoveUtcOffsets(dateTimeStr, out kind);
                         break;
                 }
 
@@ -113,7 +138,7 @@ namespace ServiceStack.Text.Common
 
                 if (dateTimeStr.Length >= XsdDateTimeFormat3F.Length
                     && dateTimeStr.Length <= XsdDateTimeFormat.Length
-                    && dateTimeStr.EndsWith(XsdUtcSuffix))
+                    && hasUtcSuffix)
                 {
                     var dateTime = Env.IsMono ? ParseManual(dateTimeStr) : null;
                     if (dateTime != null)
@@ -122,21 +147,38 @@ namespace ServiceStack.Text.Common
                     return PclExport.Instance.ParseXsdDateTimeAsUtc(dateTimeStr);
                 }
 
-                if (dateTimeStr.Length == CondensedDateTimeFormat.Length && dateTimeStr.IndexOfAny(DateTimeSeperators) == -1)
+                if (dateTimeStr.Length == CondensedDateTimeFormat.Length && dateTimeStr.IndexOfAny(DateTimeSeparators) == -1)
                 {
                     return DateTime.ParseExact(dateTimeStr, "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None);
                 }
 
                 if (dateTimeStr.Length == ShortDateTimeFormat.Length)
                 {
-                    var manualDate = ParseManual(dateTimeStr);
-                    if (manualDate != null)
-                        return manualDate.Value;
+                    try
+                    {
+                        var manualDate = ParseManual(dateTimeStr);
+                        if (manualDate != null)
+                            return manualDate.Value;
+                    }
+                    catch { }
                 }
 
                 try
                 {
-                    var dateTime = DateTime.Parse(dateTimeStr, null, DateTimeStyles.AssumeLocal);
+                    if (config.SkipDateTimeConversion)
+                    {
+                        var dateTimeStyle = kind == DateTimeKind.Unspecified
+                            ? DateTimeStyles.None
+                            : kind == DateTimeKind.Local
+                                ? DateTimeStyles.AssumeLocal
+                                : DateTimeStyles.AssumeUniversal;
+                        if (config.AlwaysUseUtc)
+                            dateTimeStyle |= DateTimeStyles.AdjustToUniversal;
+                        return DateTime.Parse(dateTimeStr, null, dateTimeStyle);
+                    }
+
+                    var assumeKind = config.AssumeUtc ? DateTimeStyles.AssumeUniversal : DateTimeStyles.AssumeLocal;
+                    var dateTime = DateTime.Parse(dateTimeStr, CultureInfo.InvariantCulture, assumeKind);
                     return dateTime.Prepare();
                 }
                 catch (FormatException)
@@ -157,6 +199,18 @@ namespace ServiceStack.Text.Common
             }
         }
 
+        private static string RemoveUtcOffsets(string dateTimeStr, out DateTimeKind kind)
+        {
+            var startOfTz = UtcOffsetInfoRegex.Match(dateTimeStr);
+            if (startOfTz.Index > 0)
+            {
+                kind = DateTimeKind.Local;
+                return dateTimeStr.Substring(0, startOfTz.Index);
+            }
+            kind = dateTimeStr.Contains("Z") ? DateTimeKind.Utc : DateTimeKind.Unspecified;
+            return dateTimeStr;
+        }
+
         /// <summary>
         /// Repairs an out-of-spec XML date/time string which incorrectly uses a space instead of a 'T' to separate the date from the time.
         /// These string are occasionally generated by SQLite and can cause errors in OrmLite when reading these columns from the DB.
@@ -165,7 +219,7 @@ namespace ServiceStack.Text.Common
         /// <returns>The repaired string. If no repairs were made, the original string is returned.</returns>
         private static string RepairXsdTimeSeparator(string dateTimeStr)
         {
-            if( (dateTimeStr.Length > XsdTimeSeparatorIndex) && (dateTimeStr[XsdTimeSeparatorIndex] == ' ') && dateTimeStr.EndsWith(XsdUtcSuffix) )
+            if ((dateTimeStr.Length > XsdTimeSeparatorIndex) && (dateTimeStr[XsdTimeSeparatorIndex] == ' ') && dateTimeStr.EndsWith(XsdUtcSuffix))
             {
                 dateTimeStr = dateTimeStr.Substring(0, XsdTimeSeparatorIndex) + XsdTimeSeparator +
                               dateTimeStr.Substring(XsdTimeSeparatorIndex + 1);
@@ -176,29 +230,47 @@ namespace ServiceStack.Text.Common
 
         public static DateTime? ParseManual(string dateTimeStr)
         {
+            var config = JsConfig.GetConfig();
+            var dateKind = config.AssumeUtc || config.AlwaysUseUtc
+                ? DateTimeKind.Utc
+                : DateTimeKind.Local;
+
+            var date = ParseManual(dateTimeStr, dateKind);
+            if (date == null)
+                return null;
+
+            return dateKind == DateTimeKind.Local
+                ? date.Value.ToLocalTime().Prepare()
+                : date;
+        }
+
+        public static DateTime? ParseManual(string dateTimeStr, DateTimeKind dateKind)
+        {
             if (dateTimeStr == null || dateTimeStr.Length < ShortDateTimeFormat.Length)
                 return null;
 
-            var dateKind = JsConfig.AssumeUtc || JsConfig.AlwaysUseUtc 
-                ? DateTimeKind.Utc
-                : DateTimeKind.Local;
             if (dateTimeStr.EndsWith(XsdUtcSuffix))
             {
                 dateTimeStr = dateTimeStr.Substring(0, dateTimeStr.Length - 1);
+                dateKind = JsConfig.SkipDateTimeConversion ? DateTimeKind.Utc : dateKind;
             }
 
             var parts = dateTimeStr.Split('T');
             if (parts.Length == 1)
                 parts = dateTimeStr.SplitOnFirst(' ');
 
-            var dateParts = parts[0].Split('-');
+            var dateParts = parts[0].Split('-', '/');
             int hh = 0, min = 0, ss = 0, ms = 0;
             double subMs = 0;
             int offsetMultiplier = 0;
 
             if (parts.Length == 1)
             {
-                return new DateTime(int.Parse(dateParts[0]), int.Parse(dateParts[1]), int.Parse(dateParts[2]), 0, 0, 0, 0, dateKind);
+                return dateParts.Length == 3 && dateParts[2].Length == "YYYY".Length
+                    ? new DateTime(int.Parse(dateParts[2]), int.Parse(dateParts[1]), int.Parse(dateParts[0]), 0, 0, 0, 0,
+                        dateKind)
+                    : new DateTime(int.Parse(dateParts[0]), int.Parse(dateParts[1]), int.Parse(dateParts[2]), 0, 0, 0, 0,
+                        dateKind);
             }
             else if (parts.Length == 2)
             {
@@ -239,10 +311,11 @@ namespace ServiceStack.Text.Common
                     }
                 }
 
-                var dateTime = new DateTime(int.Parse(dateParts[0]), int.Parse(dateParts[1]), int.Parse(dateParts[2]), hh, min, ss, ms, dateKind);
+                var dateTime = new DateTime(int.Parse(dateParts[0]), int.Parse(dateParts[1]), int.Parse(dateParts[2]), hh, min,
+                    ss, ms, dateKind);
                 if (subMs != 0)
                 {
-                    dateTime=dateTime.AddMilliseconds(subMs);
+                    dateTime = dateTime.AddMilliseconds(subMs);
                 }
 
                 if (offsetMultiplier != 0 && timeOffset != null)
@@ -263,7 +336,7 @@ namespace ServiceStack.Text.Common
                     dateTime = dateTime.AddMinutes(offsetMultiplier * min);
                 }
 
-                return dateTime.ToLocalTime().Prepare();
+                return dateTime;
             }
 
             return null;
@@ -271,7 +344,7 @@ namespace ServiceStack.Text.Common
 
         public static string ToDateTimeString(DateTime dateTime)
         {
-            return dateTime.ToStableUniversalTime().ToString(XsdDateTimeFormat);
+            return dateTime.ToStableUniversalTime().ToString(XsdDateTimeFormat, CultureInfo.InvariantCulture);
         }
 
         public static DateTime ParseDateTime(string dateTimeStr)
@@ -299,7 +372,7 @@ namespace ServiceStack.Text.Common
                 if (Env.IsMono)
                 {
                     // Without that Mono uses a Local timezone))
-                    dateTimeOffsetStr = dateTimeOffsetStr.Substring(0, dateTimeOffsetStr.Length - 1) + "+00:00";                     
+                    dateTimeOffsetStr = dateTimeOffsetStr.Substring(0, dateTimeOffsetStr.Length - 1) + "+00:00";
                 }
             }
 
@@ -325,13 +398,7 @@ namespace ServiceStack.Text.Common
 
         public static string ToXsdTimeSpanString(TimeSpan timeSpan)
         {
-            var r = XmlConvert.ToString(timeSpan);
-            if (Env.IsMono)
-            {
-                // Mono returns DT even if time is 00:00:00
-                if (r.EndsWith("DT")) return r.Substring(0, r.Length - 1);
-            }
-            return r;
+            return TimeSpanConverter.ToXsdDuration(timeSpan);
         }
 
         public static string ToXsdTimeSpanString(TimeSpan? timeSpan)
@@ -349,12 +416,15 @@ namespace ServiceStack.Text.Common
         {
             return dateTimeStr.StartsWith("P", StringComparison.Ordinal) || dateTimeStr.StartsWith("-P", StringComparison.Ordinal)
                 ? ParseXsdTimeSpan(dateTimeStr)
-                : TimeSpan.Parse(dateTimeStr);
+                : dateTimeStr.Contains(":")
+                ? TimeSpan.Parse(dateTimeStr)
+                : ParseNSTimeInterval(dateTimeStr);
         }
 
-        public static TimeSpan ParseXsdTimeSpan(string dateTimeStr)
+        public static TimeSpan ParseNSTimeInterval(string doubleInSecs)
         {
-            return XmlConvert.ToTimeSpan(dateTimeStr);
+            var secs = double.Parse(doubleInSecs, CultureInfo.InvariantCulture);
+            return TimeSpan.FromSeconds(secs);
         }
 
         public static TimeSpan? ParseNullableTimeSpan(string dateTimeStr)
@@ -364,34 +434,66 @@ namespace ServiceStack.Text.Common
                 : ParseTimeSpan(dateTimeStr);
         }
 
+        public static TimeSpan ParseXsdTimeSpan(string dateTimeStr)
+        {
+            return TimeSpanConverter.FromXsdDuration(dateTimeStr);
+        }
+
         public static TimeSpan? ParseXsdNullableTimeSpan(string dateTimeStr)
         {
-            return String.IsNullOrEmpty(dateTimeStr) ?
+            return string.IsNullOrEmpty(dateTimeStr) ?
                 null :
-                new TimeSpan?(XmlConvert.ToTimeSpan(dateTimeStr));
+                new TimeSpan?(ParseXsdTimeSpan(dateTimeStr));
         }
 
         public static string ToShortestXsdDateTimeString(DateTime dateTime)
         {
+            var config = JsConfig.GetConfig();
+
+            dateTime = dateTime.UseConfigSpecifiedSetting();
+            if (!string.IsNullOrEmpty(config.DateTimeFormat))
+            {
+                return dateTime.ToString(config.DateTimeFormat, CultureInfo.InvariantCulture);
+            }
+
             var timeOfDay = dateTime.TimeOfDay;
-
             var isStartOfDay = timeOfDay.Ticks == 0;
-            if (isStartOfDay)
-                return dateTime.ToString(ShortDateTimeFormat);
+            if (isStartOfDay && !config.SkipDateTimeConversion)
+                return dateTime.ToString(ShortDateTimeFormat, CultureInfo.InvariantCulture);
 
-            var hasFractionalSecs = (timeOfDay.Milliseconds != 0) 
-                || ((timeOfDay.Ticks%TimeSpan.TicksPerMillisecond) != 0);
+            var hasFractionalSecs = (timeOfDay.Milliseconds != 0)
+                || (timeOfDay.Ticks % TimeSpan.TicksPerMillisecond != 0);
+
+            if (config.SkipDateTimeConversion)
+            {
+                if (!hasFractionalSecs)
+                    return dateTime.Kind == DateTimeKind.Local
+                        ? dateTime.ToString(DateTimeFormatSecondsUtcOffset, CultureInfo.InvariantCulture)
+                        : dateTime.Kind == DateTimeKind.Unspecified
+                        ? dateTime.ToString(DateTimeFormatSecondsNoOffset, CultureInfo.InvariantCulture)
+                        : dateTime.ToStableUniversalTime().ToString(XsdDateTimeFormatSeconds, CultureInfo.InvariantCulture);
+
+                return dateTime.Kind == DateTimeKind.Local
+                    ? dateTime.ToString(DateTimeFormatTicksUtcOffset, CultureInfo.InvariantCulture)
+                    : dateTime.Kind == DateTimeKind.Unspecified
+                    ? dateTime.ToString(DateTimeFormatTicksNoUtcOffset, CultureInfo.InvariantCulture)
+                    : PclExport.Instance.ToXsdDateTimeString(dateTime);
+            }
+
             if (!hasFractionalSecs)
                 return dateTime.Kind != DateTimeKind.Utc
-                    ? dateTime.ToString(DateTimeFormatSecondsUtcOffset)
-                    : dateTime.ToStableUniversalTime().ToString(XsdDateTimeFormatSeconds);
+                    ? dateTime.ToString(DateTimeFormatSecondsUtcOffset, CultureInfo.InvariantCulture)
+                    : dateTime.ToStableUniversalTime().ToString(XsdDateTimeFormatSeconds, CultureInfo.InvariantCulture);
 
             return dateTime.Kind != DateTimeKind.Utc
-                ? dateTime.ToString(DateTimeFormatTicksUtcOffset)
+                ? dateTime.ToString(DateTimeFormatTicksUtcOffset, CultureInfo.InvariantCulture)
                 : PclExport.Instance.ToXsdDateTimeString(dateTime);
         }
 
         static readonly char[] TimeZoneChars = new[] { '+', '-' };
+
+        private const string MinDateTimeOffsetWcfValue = "\\/Date(-62135596800000)\\/";
+        private const string MaxDateTimeOffsetWcfValue = "\\/Date(253402300799999)\\/";
 
         /// <summary>
         /// WCF Json format: /Date(unixts+0000)/
@@ -400,6 +502,11 @@ namespace ServiceStack.Text.Common
         /// <returns></returns>
         public static DateTimeOffset ParseWcfJsonDateOffset(string wcfJsonDate)
         {
+            if (wcfJsonDate == MinDateTimeOffsetWcfValue)
+                return DateTimeOffset.MinValue;
+            if (wcfJsonDate == MaxDateTimeOffsetWcfValue)
+                return DateTimeOffset.MaxValue;
+            
             if (wcfJsonDate[0] == '\\')
             {
                 wcfJsonDate = wcfJsonDate.Substring(1);
@@ -496,30 +603,41 @@ namespace ServiceStack.Text.Common
 
         internal static TimeZoneInfo LocalTimeZone = GetLocalTimeZoneInfo();
 
-        public static void WriteWcfJsonDate(TextWriter writer, DateTime dateTime)
+        private static DateTime UseConfigSpecifiedSetting(this DateTime dateTime)
         {
             if (JsConfig.AssumeUtc && dateTime.Kind == DateTimeKind.Unspecified)
             {
-                dateTime = DateTime.SpecifyKind(dateTime, DateTimeKind.Utc);
+                return DateTime.SpecifyKind(dateTime, DateTimeKind.Utc);
             }
+            return dateTime;
+        }
 
-            if (JsConfig.DateHandler == DateHandler.ISO8601)
+        public static void WriteWcfJsonDate(TextWriter writer, DateTime dateTime)
+        {
+            var config = JsConfig.GetConfig();
+            
+            dateTime = dateTime.UseConfigSpecifiedSetting();
+            switch (config.DateHandler)
             {
-                writer.Write(dateTime.ToString("o", CultureInfo.InvariantCulture));
-                return;
-            }
-
-            if (JsConfig.DateHandler == DateHandler.RFC1123)
-            {
-                writer.Write(dateTime.ToUniversalTime().ToString("R", CultureInfo.InvariantCulture));
-                return;
+                case DateHandler.ISO8601:
+                    writer.Write(dateTime.ToString("o", CultureInfo.InvariantCulture));
+                    return;
+                case DateHandler.ISO8601DateOnly:
+                    writer.Write(dateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+                    return;
+                case DateHandler.ISO8601DateTime:
+                    writer.Write(dateTime.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture));
+                    return;
+                case DateHandler.RFC1123:
+                    writer.Write(dateTime.ToUniversalTime().ToString("R", CultureInfo.InvariantCulture));
+                    return;
             }
 
             var timestamp = dateTime.ToUnixTimeMs();
             string offset = null;
             if (dateTime.Kind != DateTimeKind.Utc)
             {
-                if (JsConfig.DateHandler == DateHandler.TimestampOffset && dateTime.Kind == DateTimeKind.Unspecified)
+                if (config.DateHandler == DateHandler.TimestampOffset && dateTime.Kind == DateTimeKind.Unspecified)
                     offset = UnspecifiedOffset;
                 else
                     offset = LocalTimeZone.GetUtcOffset(dateTime).ToTimeOffsetString();
@@ -527,8 +645,8 @@ namespace ServiceStack.Text.Common
             else
             {
                 // Normally the JsonDateHandler.TimestampOffset doesn't append an offset for Utc dates, but if
-                // the JsConfig.AppendUtcOffset is set then we will
-                if (JsConfig.DateHandler == DateHandler.TimestampOffset && JsConfig.AppendUtcOffset.HasValue && JsConfig.AppendUtcOffset.Value)
+                // the config.AppendUtcOffset is set then we will
+                if (config.DateHandler == DateHandler.TimestampOffset && config.AppendUtcOffset)
                     offset = UtcOffset;
             }
 
@@ -543,14 +661,14 @@ namespace ServiceStack.Text.Common
 
         public static string ToWcfJsonDate(DateTime dateTime)
         {
-            var sb = new StringBuilder();
+            var sb = StringBuilderThreadStatic.Allocate();
             using (var writer = new StringWriter(sb))
             {
                 WriteWcfJsonDate(writer, dateTime);
-                return sb.ToString();
+                return StringBuilderThreadStatic.ReturnAndFree(sb);
             }
         }
-
+        
         public static void WriteWcfJsonDateTimeOffset(TextWriter writer, DateTimeOffset dateTimeOffset)
         {
             if (JsConfig.DateHandler == DateHandler.ISO8601)
@@ -575,11 +693,11 @@ namespace ServiceStack.Text.Common
 
         public static string ToWcfJsonDateTimeOffset(DateTimeOffset dateTimeOffset)
         {
-            var sb = new StringBuilder();
+            var sb = StringBuilderThreadStatic.Allocate();
             using (var writer = new StringWriter(sb))
             {
                 WriteWcfJsonDateTimeOffset(writer, dateTimeOffset);
-                return sb.ToString();
+                return StringBuilderThreadStatic.ReturnAndFree(sb);
             }
         }
     }
